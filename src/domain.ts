@@ -1,0 +1,284 @@
+import { isAbsolute, normalize } from "node:path";
+
+export type TutorMode = "study" | "drill" | "review" | "exam";
+export type QuestionKind = "primary" | "transfer" | "exam";
+export type Correctness = "correct" | "partial" | "incorrect" | "ungradable";
+export type HintLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+export type FsrsTrackName = "unassisted" | "assisted";
+
+export interface SourceReference {
+  materialId: string;
+  path: string;
+  locator: string;
+}
+
+export interface Question {
+  id: string;
+  kind: QuestionKind;
+  targetConceptId: string;
+  prompt: string;
+  sourceRefs: SourceReference[];
+}
+
+export interface Attempt {
+  id: string;
+  operationId: string;
+  retryOfAttemptId?: string;
+  question: Question;
+  mode: TutorMode;
+  submittedAt: string;
+  answer: string;
+  confidence: number;
+  unaidedAtSubmission: boolean;
+  highestHintLevel: HintLevel;
+  revealed: boolean;
+  correctness?: Correctness;
+  gradingRationale?: string;
+  misconception?: string;
+  selfExplanation?: string;
+  transferAttemptId?: string;
+}
+
+export interface FsrsTrack {
+  card: Record<string, unknown>;
+  reviewHistory: Array<{
+    reviewedAt: string;
+    rating: "Again" | "Hard" | "Good";
+    log: Record<string, unknown>;
+  }>;
+}
+
+export interface ConceptProgress {
+  unassisted?: FsrsTrack;
+  assisted?: FsrsTrack;
+  misconceptions: Array<{
+    text: string;
+    sourceRef?: SourceReference;
+    lastSeenAt: string;
+    resolvedAt?: string;
+  }>;
+}
+
+export interface CourseMaterial {
+  id: string;
+  path: string;
+  addedAt: string;
+}
+
+export interface CourseConcept {
+  id: string;
+  name: string;
+  profileId?: string;
+}
+
+export interface Course {
+  schemaVersion: 1;
+  id: string;
+  name: string;
+  revision: number;
+  createdAt: string;
+  appliedOperationIds: string[];
+  materials: CourseMaterial[];
+  concepts: CourseConcept[];
+}
+
+export interface LearningHistory {
+  schemaVersion: 1;
+  courseId: string;
+  revision: number;
+  appliedOperationIds: string[];
+  attempts: Attempt[];
+  concepts: Record<string, ConceptProgress>;
+}
+
+export interface CourseCatalog {
+  schemaVersion: 1;
+  revision: number;
+  appliedOperationIds: string[];
+  courseIds: string[];
+  defaultCourseId?: string;
+}
+
+export interface SessionActivity {
+  schemaVersion: 1;
+  state: ActivityState;
+}
+
+export interface ModeOptions {
+  deadlineAt?: string;
+}
+
+export interface Submission {
+  answer: string;
+  confidence: number;
+}
+
+export interface ParseError {
+  message: string;
+}
+
+export interface ExamDraft {
+  drafts: Record<string, Submission>;
+}
+
+export interface Dashboard {
+  courseId: string;
+  dueUnassisted: string[];
+  dueAssisted: string[];
+  confidenceMeanAbsoluteError?: number;
+  hintReliance: { assistedAttempts: number; totalAttempts: number };
+  misconceptions: Array<{ conceptId: string; text: string }>;
+}
+
+export type ActivityState =
+  | { tag: "idle"; courseId?: string }
+  | {
+      tag: "awaiting-question";
+      courseId: string;
+      mode: Exclude<TutorMode, "exam">;
+      operationId: string;
+    }
+  | {
+      tag: "awaiting-primary-answer";
+      courseId: string;
+      mode: Exclude<TutorMode, "exam">;
+      question: Question;
+      hintLevel: HintLevel;
+      revealed: boolean;
+    }
+  | {
+      tag: "awaiting-grade";
+      courseId: string;
+      attemptId: string;
+      purpose: "primary" | "transfer" | "explanation";
+    }
+  | {
+      tag: "hint-requested";
+      courseId: string;
+      question: Question;
+      nextHintLevel: Exclude<HintLevel, 0>;
+      revealed: boolean;
+    }
+  | {
+      tag: "awaiting-correction";
+      courseId: string;
+      attemptId: string;
+      question: Question;
+      hintLevel: HintLevel;
+    }
+  | {
+      tag: "awaiting-explanation";
+      courseId: string;
+      attemptId: string;
+      question: Question;
+      reason: "error" | "reveal";
+    }
+  | {
+      tag: "awaiting-transfer";
+      courseId: string;
+      parentAttemptId: string;
+      operationId: string;
+    }
+  | {
+      tag: "exam-generating";
+      courseId: string;
+      operationId: string;
+      startedAt: string;
+      deadlineAt?: string;
+    }
+  | { tag: "exam-active"; courseId: string; exam: ExamSession }
+  | { tag: "exam-submitted"; courseId: string; exam: ExamSession };
+
+export interface ExamSession {
+  id: string;
+  operationId: string;
+  startedAt: string;
+  deadlineAt?: string;
+  submittedAt?: string;
+  status: "active" | "submitted" | "expired" | "graded";
+  items: Question[];
+  drafts: Record<
+    string,
+    { answer: string; confidence: number; submittedAt: string }
+  >;
+}
+
+export function assertCourseInvariant(course: Course): void {
+  assertUniqueCourseMaterialIds(course.materials);
+  assertNormalizedMaterialPaths(course.materials);
+  assertUniqueMaterialPaths(course.materials);
+  assertUniqueConceptIds(course.concepts);
+}
+
+export function assertQuestion(course: Course, question: Question): void {
+  assertCourseInvariant(course);
+
+  if (!course.concepts.some(({ id }) => id === question.targetConceptId)) {
+    throw new Error(`Unknown target concept: ${question.targetConceptId}`);
+  }
+
+  if (question.sourceRefs.length === 0) {
+    throw new Error("Question must reference at least one configured material");
+  }
+
+  for (const sourceRef of question.sourceRefs) {
+    const material = course.materials.find(
+      ({ id }) => id === sourceRef.materialId,
+    );
+    if (material === undefined) {
+      throw new Error(`Unknown source material: ${sourceRef.materialId}`);
+    }
+
+    assertNormalizedPath(sourceRef.path, "Source path");
+    if (sourceRef.path !== material.path) {
+      throw new Error("Source path is not configured for this course");
+    }
+  }
+}
+
+function assertUniqueCourseMaterialIds(
+  materials: readonly CourseMaterial[],
+): void {
+  assertUnique(
+    materials.map(({ id }) => id),
+    "Duplicate material id",
+  );
+}
+
+function assertNormalizedMaterialPaths(
+  materials: readonly CourseMaterial[],
+): void {
+  for (const material of materials) {
+    assertNormalizedPath(material.path, "Material path");
+  }
+}
+
+function assertUniqueMaterialPaths(materials: readonly CourseMaterial[]): void {
+  assertUnique(
+    materials.map(({ path }) => path),
+    "Duplicate material path",
+  );
+}
+
+function assertUniqueConceptIds(concepts: readonly CourseConcept[]): void {
+  assertUnique(
+    concepts.map(({ id }) => id),
+    "Duplicate concept id",
+  );
+}
+
+function assertUnique(values: readonly string[], errorPrefix: string): void {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      throw new Error(`${errorPrefix}: ${value}`);
+    }
+    seen.add(value);
+  }
+}
+
+function assertNormalizedPath(path: string, label: string): void {
+  if (!isAbsolute(path) || normalize(path) !== path) {
+    throw new Error(`${label} must be absolute and normalized`);
+  }
+}
