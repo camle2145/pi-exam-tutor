@@ -232,7 +232,24 @@ export class LocalStore implements Store {
   }
 
   private async readCourse(courseId: string): Promise<Course> {
-    const decoded = await this.readJson(this.coursePath(courseId), "course");
+    const course = await this.readCourseIfPresent(courseId);
+    if (course === undefined) {
+      throw new Error("Invalid course: file does not exist");
+    }
+    return course;
+  }
+
+  private async readCourseIfPresent(
+    courseId: string,
+  ): Promise<Course | undefined> {
+    const decoded = await this.readJson(
+      this.coursePath(courseId),
+      "course",
+      true,
+    );
+    if (decoded === undefined) {
+      return undefined;
+    }
     assertCourse(decoded);
     if (decoded.id !== courseId) {
       throw new Error("Invalid course: course ID does not match its path");
@@ -395,8 +412,8 @@ export class LocalStore implements Store {
       if (!isCourseId(entry)) {
         continue;
       }
-      const course = await this.readCourse(entry);
-      if (course.appliedOperationIds.includes(operationId)) {
+      const course = await this.readCourseIfPresent(entry);
+      if (course?.appliedOperationIds.includes(operationId)) {
         return course;
       }
     }
@@ -489,6 +506,7 @@ function assertCatalog(value: unknown): asserts value is CourseCatalog {
       !isRevision(value.revision) ||
       !isOperationIds(value.appliedOperationIds) ||
       !isStringArray(value.courseIds) ||
+      !value.courseIds.every(isCourseId) ||
       (value.defaultCourseId !== undefined &&
         !isCourseId(value.defaultCourseId)) ||
       new Set(value.courseIds).size !== value.courseIds.length

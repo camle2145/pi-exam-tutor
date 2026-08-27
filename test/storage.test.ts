@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { SequenceIds, tempRoot } from "./helpers.js";
@@ -29,6 +29,63 @@ test("persists course history across fresh store instances", async () => {
 
   const second = new LocalStore(root, ids);
   expect((await second.getHistory(course.id)).revision).toBe(1);
+});
+
+test("round-trips independent assisted and unassisted tracks", async () => {
+  const { root, ids, store: first } = await createStore();
+  const course = await first.createCourse("A", "op-create");
+
+  await first.commitHistory(course.id, 0, "op-tracks", (history) => ({
+    ...history,
+    revision: 1,
+    concepts: {
+      "concept-1": {
+        unassisted: {
+          card: { due: "2026-08-28" },
+          reviewHistory: [
+            {
+              reviewedAt: "2026-08-27T00:00:00.000Z",
+              rating: "Good",
+              log: { elapsedDays: 1 },
+            },
+          ],
+        },
+        assisted: {
+          card: { due: "2026-08-29" },
+          reviewHistory: [
+            {
+              reviewedAt: "2026-08-27T01:00:00.000Z",
+              rating: "Again",
+              log: { elapsedDays: 0 },
+            },
+          ],
+        },
+        misconceptions: [],
+      },
+    },
+  }));
+
+  const history = await new LocalStore(root, ids).getHistory(course.id);
+  expect(history.concepts["concept-1"]?.unassisted).toEqual({
+    card: { due: "2026-08-28" },
+    reviewHistory: [
+      {
+        reviewedAt: "2026-08-27T00:00:00.000Z",
+        rating: "Good",
+        log: { elapsedDays: 1 },
+      },
+    ],
+  });
+  expect(history.concepts["concept-1"]?.assisted).toEqual({
+    card: { due: "2026-08-29" },
+    reviewHistory: [
+      {
+        reviewedAt: "2026-08-27T01:00:00.000Z",
+        rating: "Again",
+        log: { elapsedDays: 0 },
+      },
+    ],
+  });
 });
 
 test("keeps courses isolated", async () => {
@@ -80,6 +137,16 @@ test("rejects a stale history revision", async () => {
   ).rejects.toThrow(RevisionConflictError);
 });
 
+test("ignores an uncommitted generated course directory", async () => {
+  const { root, store } = await createStore();
+  await mkdir(join(root, "courses", "course-1"), { recursive: true });
+
+  const course = await store.createCourse("A", "op-create");
+
+  expect(course.id).toBe("course-2");
+  expect(await store.listCourses()).toEqual([course]);
+});
+
 test("rejects corrupt persisted JSON", async () => {
   const { root, store } = await createStore();
   const course = await store.createCourse("A", "op-create");
@@ -91,6 +158,21 @@ test("rejects corrupt persisted JSON", async () => {
   await expect(store.getHistory(course.id)).rejects.toThrow(
     "Invalid learning history",
   );
+});
+
+test("rejects a valid JSON catalog with an unsafe course ID", async () => {
+  const { root, store } = await createStore();
+  await writeFile(
+    join(root, "catalog.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      revision: 0,
+      appliedOperationIds: [],
+      courseIds: ["../outside-course"],
+    }),
+  );
+
+  await expect(store.listCourses()).rejects.toThrow("Invalid catalog");
 });
 
 test("saves a course once per operation and validates revisions", async () => {
