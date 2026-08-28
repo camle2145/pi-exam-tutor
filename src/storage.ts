@@ -250,11 +250,12 @@ export class LocalStore implements Store {
     if (decoded === undefined) {
       return undefined;
     }
-    assertCourse(decoded);
-    if (decoded.id !== courseId) {
+    const course = withDefaultPartialAnswerPolicy(decoded);
+    assertCourse(course);
+    if (course.id !== courseId) {
       throw new Error("Invalid course: course ID does not match its path");
     }
-    return decoded;
+    return course;
   }
 
   private async readHistory(courseId: string): Promise<LearningHistory> {
@@ -517,6 +518,13 @@ function assertCatalog(value: unknown): asserts value is CourseCatalog {
   } catch {
     throw new Error("Invalid catalog");
   }
+}
+
+function withDefaultPartialAnswerPolicy(value: unknown): unknown {
+  if (isRecord(value) && !Object.hasOwn(value, "partialAnswerPolicy")) {
+    return { ...value, partialAnswerPolicy: "remediate" };
+  }
+  return value;
 }
 
 function assertCourse(value: unknown): asserts value is Course {

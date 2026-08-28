@@ -1,6 +1,5 @@
 import type {
   ActivityState,
-  Correctness,
   ExamSession,
   HintLevel,
   PartialAnswerPolicy,

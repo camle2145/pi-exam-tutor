@@ -165,7 +165,23 @@ test("rejects corrupt persisted JSON", async () => {
   );
 });
 
-test("rejects a persisted course without a valid partial-answer policy", async () => {
+test("defaults a legacy persisted course without a partial-answer policy", async () => {
+  const { root, store } = await createStore();
+  const course = await store.createCourse("A", "op-create");
+  const legacyCourse: Record<string, unknown> = { ...course };
+  delete legacyCourse.partialAnswerPolicy;
+  await writeFile(
+    join(root, "courses", course.id, "course.json"),
+    JSON.stringify(legacyCourse),
+  );
+
+  await expect(store.getCourse(course.id)).resolves.toMatchObject({
+    id: course.id,
+    partialAnswerPolicy: "remediate",
+  });
+});
+
+test("rejects a persisted course with an invalid partial-answer policy", async () => {
   const { root, store } = await createStore();
   const course = await store.createCourse("A", "op-create");
   await writeFile(
