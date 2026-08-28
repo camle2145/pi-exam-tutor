@@ -5,6 +5,7 @@ export type QuestionKind = "primary" | "transfer" | "exam";
 export type Correctness = "correct" | "partial" | "incorrect" | "ungradable";
 export type HintLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export type FsrsTrackName = "unassisted" | "assisted";
+export type PartialAnswerPolicy = "remediate" | "continue";
 
 export interface SourceReference {
   materialId: string;
@@ -78,6 +79,7 @@ export interface Course {
   revision: number;
   createdAt: string;
   appliedOperationIds: string[];
+  partialAnswerPolicy: PartialAnswerPolicy;
   materials: CourseMaterial[];
   concepts: CourseConcept[];
 }
@@ -151,17 +153,29 @@ export type ActivityState =
       courseId: string;
       attemptId: string;
       purpose: "primary" | "transfer" | "explanation";
+      question: Question;
+      hintLevel: HintLevel;
+      mode: Exclude<TutorMode, "exam">;
     }
   | {
       tag: "hint-requested";
       courseId: string;
+      mode: Exclude<TutorMode, "exam">;
       question: Question;
       nextHintLevel: Exclude<HintLevel, 0>;
       revealed: boolean;
     }
   | {
+      tag: "reveal-requested";
+      courseId: string;
+      mode: Exclude<TutorMode, "exam">;
+      question: Question;
+      hintLevel: HintLevel;
+    }
+  | {
       tag: "awaiting-correction";
       courseId: string;
+      mode: Exclude<TutorMode, "exam">;
       attemptId: string;
       question: Question;
       hintLevel: HintLevel;
@@ -169,6 +183,7 @@ export type ActivityState =
   | {
       tag: "awaiting-explanation";
       courseId: string;
+      mode: Exclude<TutorMode, "exam">;
       attemptId: string;
       question: Question;
       reason: "error" | "reveal";
@@ -176,6 +191,7 @@ export type ActivityState =
   | {
       tag: "awaiting-transfer";
       courseId: string;
+      mode: Exclude<TutorMode, "exam">;
       parentAttemptId: string;
       operationId: string;
     }
@@ -204,6 +220,7 @@ export interface ExamSession {
 }
 
 export function assertCourseInvariant(course: Course): void {
+  assertPartialAnswerPolicy(course.partialAnswerPolicy);
   assertUniqueCourseMaterialIds(course.materials);
   assertNormalizedMaterialPaths(course.materials);
   assertUniqueMaterialPaths(course.materials);
@@ -233,6 +250,14 @@ export function assertQuestion(course: Course, question: Question): void {
     if (sourceRef.path !== material.path) {
       throw new Error("Source path is not configured for this course");
     }
+  }
+}
+
+function assertPartialAnswerPolicy(
+  value: unknown,
+): asserts value is PartialAnswerPolicy {
+  if (value !== "remediate" && value !== "continue") {
+    throw new Error("Invalid partial answer policy");
   }
 }
 

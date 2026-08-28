@@ -457,6 +457,7 @@ function createCourse(id: string, name: string, operationId: string): Course {
     revision: 0,
     createdAt: new Date().toISOString(),
     appliedOperationIds: [operationId],
+    partialAnswerPolicy: "remediate",
     materials: [],
     concepts: [],
   };
@@ -528,6 +529,7 @@ function assertCourse(value: unknown): asserts value is Course {
       !isRevision(value.revision) ||
       typeof value.createdAt !== "string" ||
       !isOperationIds(value.appliedOperationIds) ||
+      !isPartialAnswerPolicy(value.partialAnswerPolicy) ||
       !Array.isArray(value.materials) ||
       !value.materials.every(isCourseMaterial) ||
       !Array.isArray(value.concepts) ||
@@ -672,6 +674,10 @@ function isTutorMode(value: unknown): boolean {
     value === "review" ||
     value === "exam"
   );
+}
+
+function isPartialAnswerPolicy(value: unknown): boolean {
+  return value === "remediate" || value === "continue";
 }
 
 function isCorrectness(value: unknown): boolean {

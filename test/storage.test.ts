@@ -22,6 +22,11 @@ test("persists course history across fresh store instances", async () => {
   const { root, ids, store: first } = await createStore();
   const course = await first.createCourse("Biology", "op-create");
 
+  expect(course.partialAnswerPolicy).toBe("remediate");
+  expect(
+    (await new LocalStore(root, ids).getCourse(course.id)).partialAnswerPolicy,
+  ).toBe("remediate");
+
   await first.commitHistory(course.id, 0, "op-history", (history) => ({
     ...history,
     revision: history.revision + 1,
@@ -158,6 +163,17 @@ test("rejects corrupt persisted JSON", async () => {
   await expect(store.getHistory(course.id)).rejects.toThrow(
     "Invalid learning history",
   );
+});
+
+test("rejects a persisted course without a valid partial-answer policy", async () => {
+  const { root, store } = await createStore();
+  const course = await store.createCourse("A", "op-create");
+  await writeFile(
+    join(root, "courses", course.id, "course.json"),
+    JSON.stringify({ ...course, partialAnswerPolicy: "skip" }),
+  );
+
+  await expect(store.getCourse(course.id)).rejects.toThrow("Invalid course");
 });
 
 test("rejects a valid JSON catalog with an unsafe course ID", async () => {
