@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { type Course, type Question } from "../src/domain.js";
 import { TutorApplicationService } from "../src/application.js";
+import { buildDashboard } from "../src/dashboard.js";
 import { FakeClock, SequenceIds, tempRoot } from "./helpers.js";
 import { LocalStore } from "../src/storage.js";
 
@@ -187,6 +188,140 @@ test("records a model-delivered reveal solution before requesting explanation", 
     revealed: true,
     highestHintLevel: 0,
     selfExplanation: "I can now explain it.",
+  });
+});
+
+test("projects unaided evidence, calibration, due tracks, and unresolved misconceptions", async () => {
+  const { app, course, store, question } = await createApp();
+  const complete = async (
+    confidence: number,
+    correctness: "correct" | "incorrect",
+    hinted = false,
+  ) => {
+    let activity = await app.recordQuestion(
+      await app.requestMode(course.id, "study"),
+      question,
+    );
+    if (hinted) {
+      activity = await app.recordHint(await app.requestHint(activity), 1);
+    }
+    const submitted = await app.acceptSubmission(activity, {
+      answer: "answer",
+      confidence,
+    });
+    await app.recordGrade(submitted, {
+      correctness,
+      gradingRationale: "graded",
+      ...(correctness === "incorrect"
+        ? { misconception: "Acceleration changes velocity." }
+        : {}),
+    });
+  };
+
+  await complete(90, "correct");
+  await complete(70, "correct");
+  await complete(20, "correct");
+  await complete(40, "incorrect", true);
+
+  const dashboard = buildDashboard(
+    course,
+    await store.getHistory(course.id),
+    new Date("2026-09-30T09:00:00.000Z"),
+  );
+
+  expect(dashboard.dueUnassisted).toEqual(["kinematics"]);
+  expect(dashboard.dueAssisted).toEqual(["kinematics"]);
+  expect(dashboard.unaidedCorrectRetrievalCount).toBe(3);
+  expect(dashboard.unaidedEvidence).toBe("established evidence");
+  expect(dashboard.maximumHintLevel).toBe(1);
+  expect(dashboard.hintReliance).toEqual({
+    assistedAttempts: 1,
+    totalAttempts: 4,
+  });
+  expect(dashboard.confidenceMeanAbsoluteError).toBe(40);
+  expect(dashboard.confidenceCalibration).toEqual([
+    {
+      range: "0–24",
+      attempts: 1,
+      meanConfidence: 20,
+      fullyCorrectRate: 1,
+    },
+    {
+      range: "25–49",
+      attempts: 1,
+      meanConfidence: 40,
+      fullyCorrectRate: 0,
+    },
+    {
+      range: "50–74",
+      attempts: 1,
+      meanConfidence: 70,
+      fullyCorrectRate: 1,
+    },
+    {
+      range: "75–100",
+      attempts: 1,
+      meanConfidence: 90,
+      fullyCorrectRate: 1,
+    },
+  ]);
+  expect(dashboard.misconceptions).toEqual([
+    { conceptId: "kinematics", text: "Acceleration changes velocity." },
+  ]);
+});
+
+test("excludes ungradable attempts from calibration and unaided evidence", async () => {
+  const { course, question } = await createApp();
+  const history = {
+    schemaVersion: 1 as const,
+    courseId: course.id,
+    revision: 0,
+    appliedOperationIds: [],
+    concepts: {},
+    attempts: [
+      {
+        id: "attempt-1",
+        operationId: "operation-1",
+        question,
+        mode: "study" as const,
+        submittedAt: now.toISOString(),
+        answer: "answer",
+        confidence: 100,
+        unaidedAtSubmission: true,
+        highestHintLevel: 0 as const,
+        revealed: false,
+        correctness: "correct" as const,
+      },
+      {
+        id: "attempt-2",
+        operationId: "operation-2",
+        question,
+        mode: "study" as const,
+        submittedAt: now.toISOString(),
+        answer: "answer",
+        confidence: 0,
+        unaidedAtSubmission: true,
+        highestHintLevel: 0 as const,
+        revealed: false,
+        correctness: "ungradable" as const,
+      },
+    ],
+  };
+
+  const dashboard = buildDashboard(course, history, now);
+
+  expect(dashboard.unaidedCorrectRetrievalCount).toBe(1);
+  expect(dashboard.unaidedEvidence).toBe("emerging");
+  expect(dashboard.confidenceMeanAbsoluteError).toBe(0);
+  expect(dashboard.confidenceCalibration[0]).toEqual({
+    range: "0–24",
+    attempts: 0,
+  });
+  expect(dashboard.confidenceCalibration[3]).toEqual({
+    range: "75–100",
+    attempts: 1,
+    meanConfidence: 100,
+    fullyCorrectRate: 1,
   });
 });
 

@@ -123,11 +123,25 @@ export interface ExamDraft {
   drafts: Record<string, Submission>;
 }
 
+export interface CalibrationBin {
+  range: "0–24" | "25–49" | "50–74" | "75–100";
+  attempts: number;
+  meanConfidence?: number;
+  fullyCorrectRate?: number;
+}
+
+export type UnaidedEvidence =
+  "not demonstrated" | "emerging" | "established evidence";
+
 export interface Dashboard {
   courseId: string;
   dueUnassisted: string[];
   dueAssisted: string[];
+  unaidedCorrectRetrievalCount: number;
+  unaidedEvidence: UnaidedEvidence;
   confidenceMeanAbsoluteError?: number;
+  confidenceCalibration: CalibrationBin[];
+  maximumHintLevel: HintLevel;
   hintReliance: { assistedAttempts: number; totalAttempts: number };
   misconceptions: Array<{ conceptId: string; text: string }>;
 }
