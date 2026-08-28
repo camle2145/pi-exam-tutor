@@ -250,7 +250,9 @@ export class LocalStore implements Store {
     if (decoded === undefined) {
       return undefined;
     }
-    const course = withDefaultPartialAnswerPolicy(decoded);
+    const course = withDefaultProposedConcepts(
+      withDefaultPartialAnswerPolicy(decoded),
+    );
     assertCourse(course);
     if (course.id !== courseId) {
       throw new Error("Invalid course: course ID does not match its path");
@@ -461,6 +463,7 @@ function createCourse(id: string, name: string, operationId: string): Course {
     partialAnswerPolicy: "remediate",
     materials: [],
     concepts: [],
+    proposedConcepts: [],
   };
 }
 
@@ -527,6 +530,13 @@ function withDefaultPartialAnswerPolicy(value: unknown): unknown {
   return value;
 }
 
+function withDefaultProposedConcepts(value: unknown): unknown {
+  if (isRecord(value) && !Array.isArray(value.proposedConcepts)) {
+    return { ...value, proposedConcepts: [] };
+  }
+  return value;
+}
+
 function assertCourse(value: unknown): asserts value is Course {
   try {
     if (
@@ -541,7 +551,9 @@ function assertCourse(value: unknown): asserts value is Course {
       !Array.isArray(value.materials) ||
       !value.materials.every(isCourseMaterial) ||
       !Array.isArray(value.concepts) ||
-      !value.concepts.every(isCourseConcept)
+      !value.concepts.every(isCourseConcept) ||
+      !Array.isArray(value.proposedConcepts) ||
+      !value.proposedConcepts.every(isCourseConceptProposal)
     ) {
       throw new Error("shape");
     }
@@ -585,7 +597,19 @@ function isCourseConcept(value: unknown): boolean {
     isRecord(value) &&
     typeof value.id === "string" &&
     typeof value.name === "string" &&
+    (value.parentId === undefined || typeof value.parentId === "string") &&
     (value.profileId === undefined || typeof value.profileId === "string")
+  );
+}
+
+function isCourseConceptProposal(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    (value.parentId === undefined || typeof value.parentId === "string") &&
+    Array.isArray(value.sourceRefs) &&
+    value.sourceRefs.every(isSourceReference)
   );
 }
 

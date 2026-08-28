@@ -25,6 +25,7 @@ const course: Course = {
     },
   ],
   concepts: [{ id: "kinematics", name: "Kinematics" }],
+  proposedConcepts: [],
 };
 
 const question: Question = {

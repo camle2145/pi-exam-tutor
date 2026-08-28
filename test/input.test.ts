@@ -76,10 +76,13 @@ test("parses complete configured exam drafts without feedback", () => {
   });
 });
 
-test("rejects malformed, unknown, duplicate, and missing exam drafts", () => {
-  expect(parseExamDraft("1. [confidence: 60]\nA", ["1", "2"])).toMatchObject({
-    message: expect.stringContaining("Missing exam draft: 2"),
+test("accepts a partial exam-draft update for later amendment", () => {
+  expect(parseExamDraft("1. [confidence: 60]\nA", ["1", "2"])).toEqual({
+    drafts: { "1": { confidence: 60, answer: "A" } },
   });
+});
+
+test("rejects malformed, unknown, and duplicate exam drafts", () => {
   expect(
     parseExamDraft("1. [confidence: 60]\nA\n1. [confidence: 70]\nB", ["1"]),
   ).toMatchObject({ message: expect.stringContaining("Duplicate") });

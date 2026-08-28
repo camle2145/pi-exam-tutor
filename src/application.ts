@@ -6,6 +6,8 @@ import {
   type ActivityState,
   type Correctness,
   type Course,
+  type CourseConceptProposal,
+  type ExamGrade,
   type ExamSession,
   type HintLevel,
   type ModeOptions,
@@ -69,6 +71,24 @@ export interface TutorApplication {
     exam: ExamSession,
   ): Promise<SessionActivity>;
   submitExam(activity: SessionActivity): Promise<SessionActivity>;
+  proposeConcepts(
+    courseId: string,
+    proposals: readonly import("./domain.js").CourseConceptProposal[],
+  ): Promise<Course>;
+  approveConcepts(
+    courseId: string,
+    conceptIds: readonly string[],
+  ): Promise<Course>;
+  editProposedConcept(
+    courseId: string,
+    conceptId: string,
+    update: { name?: string; parentId?: string },
+  ): Promise<Course>;
+  removeProposedConcept(courseId: string, conceptId: string): Promise<Course>;
+  recordExamGrades(
+    activity: SessionActivity,
+    grades: readonly import("./domain.js").ExamGrade[],
+  ): Promise<SessionActivity>;
   serializeActivity(activity: SessionActivity): string;
   restoreActivity(snapshot: string): SessionActivity;
 }
@@ -439,6 +459,306 @@ export class TutorApplicationService implements TutorApplication {
         type: "examSubmitted",
         submittedAt: now.toISOString(),
         expired: deadline !== undefined && now > new Date(deadline),
+      }),
+    );
+  }
+
+  async proposeConcepts(
+    courseId: string,
+    proposals: readonly CourseConceptProposal[],
+  ): Promise<Course> {
+    if (proposals.length === 0) {
+      throw new Error("Must propose at least one concept");
+    }
+    for (const proposal of proposals) {
+      if (typeof proposal.id !== "string" || proposal.id.trim() === "") {
+        throw new Error("Each proposal must have a nonempty ID");
+      }
+      if (typeof proposal.name !== "string" || proposal.name.trim() === "") {
+        throw new Error("Each proposal must have a nonempty name");
+      }
+      if (
+        !Array.isArray(proposal.sourceRefs) ||
+        proposal.sourceRefs.length === 0
+      ) {
+        throw new Error(
+          "Each proposal must cite at least one configured material",
+        );
+      }
+    }
+
+    const course = await this.store.getCourse(courseId);
+
+    const allIds = new Set([
+      ...course.concepts.map(({ id }) => id),
+      ...course.proposedConcepts.map(({ id }) => id),
+    ]);
+    for (const proposal of proposals) {
+      if (allIds.has(proposal.id)) {
+        throw new Error(`Duplicate concept id: ${proposal.id}`);
+      }
+      allIds.add(proposal.id);
+    }
+
+    for (const proposal of proposals) {
+      if (proposal.parentId !== undefined && !allIds.has(proposal.parentId)) {
+        throw new Error(`Unknown parent concept: ${proposal.parentId}`);
+      }
+    }
+
+    for (const proposal of proposals) {
+      for (const sourceRef of proposal.sourceRefs) {
+        const material = course.materials.find(
+          ({ id }) => id === sourceRef.materialId,
+        );
+        if (material === undefined) {
+          throw new Error(`Unknown source material: ${sourceRef.materialId}`);
+        }
+        if (sourceRef.path !== material.path) {
+          throw new Error(
+            `Source path must match the configured material path: ${sourceRef.path}`,
+          );
+        }
+      }
+    }
+
+    const next: Course = {
+      ...course,
+      revision: course.revision + 1,
+      proposedConcepts: [...course.proposedConcepts, ...proposals],
+    };
+    assertCourseInvariant(next);
+    return this.store.saveCourse(next, course.revision, this.operationId());
+  }
+
+  async approveConcepts(
+    courseId: string,
+    conceptIds: readonly string[],
+  ): Promise<Course> {
+    const course = await this.store.getCourse(courseId);
+
+    if (conceptIds.length === 0) {
+      conceptIds = course.proposedConcepts.map(({ id }) => id);
+    }
+
+    const byId = new Map(course.proposedConcepts.map((c) => [c.id, c]));
+    for (const id of conceptIds) {
+      if (!byId.has(id)) {
+        throw new Error(`No pending proposal: ${id}`);
+      }
+    }
+
+    const approved: Course["concepts"] = conceptIds.map((id) => {
+      const proposal = byId.get(id)!;
+      return {
+        id: proposal.id,
+        name: proposal.name,
+        parentId: proposal.parentId,
+      };
+    });
+
+    const removedIds = new Set(conceptIds);
+    const next: Course = {
+      ...course,
+      revision: course.revision + 1,
+      concepts: [...course.concepts, ...approved],
+      proposedConcepts: course.proposedConcepts.filter(
+        ({ id }) => !removedIds.has(id),
+      ),
+    };
+    assertCourseInvariant(next);
+    return this.store.saveCourse(next, course.revision, this.operationId());
+  }
+
+  async editProposedConcept(
+    courseId: string,
+    conceptId: string,
+    update: { name?: string; parentId?: string },
+  ): Promise<Course> {
+    const course = await this.store.getCourse(courseId);
+
+    const byId = new Map(course.proposedConcepts.map((c) => [c.id, c]));
+    if (!byId.has(conceptId)) {
+      throw new Error(`No pending proposal: ${conceptId}`);
+    }
+
+    const merged: CourseConceptProposal = {
+      ...byId.get(conceptId)!,
+      ...(update.name !== undefined ? { name: update.name } : {}),
+      ...(update.parentId !== undefined ? { parentId: update.parentId } : {}),
+    };
+
+    const allIds = new Set([
+      ...course.concepts.map(({ id }) => id),
+      ...course.proposedConcepts.map(({ id }) => id),
+    ]);
+    if (
+      merged.parentId !== undefined &&
+      merged.parentId !== merged.id &&
+      !allIds.has(merged.parentId)
+    ) {
+      throw new Error(`Unknown parent concept: ${merged.parentId}`);
+    }
+
+    const next: Course = {
+      ...course,
+      revision: course.revision + 1,
+      proposedConcepts: course.proposedConcepts.map((c) =>
+        c.id === conceptId ? merged : c,
+      ),
+    };
+    assertCourseInvariant(next);
+    return this.store.saveCourse(next, course.revision, this.operationId());
+  }
+
+  async removeProposedConcept(
+    courseId: string,
+    conceptId: string,
+  ): Promise<Course> {
+    const course = await this.store.getCourse(courseId);
+
+    const byId = new Map(course.proposedConcepts.map((c) => [c.id, c]));
+    if (!byId.has(conceptId)) {
+      throw new Error(`No pending proposal: ${conceptId}`);
+    }
+
+    for (const proposal of course.proposedConcepts) {
+      if (proposal.parentId === conceptId) {
+        throw new Error(
+          `Cannot remove concept that is a parent of: ${proposal.id}`,
+        );
+      }
+    }
+
+    const next: Course = {
+      ...course,
+      revision: course.revision + 1,
+      proposedConcepts: course.proposedConcepts.filter(
+        ({ id }) => id !== conceptId,
+      ),
+    };
+    assertCourseInvariant(next);
+    return this.store.saveCourse(next, course.revision, this.operationId());
+  }
+
+  async recordExamGrades(
+    current: SessionActivity,
+    grades: readonly ExamGrade[],
+  ): Promise<SessionActivity> {
+    const course = await this.courseFor(current);
+    if (current.state.tag !== "exam-submitted") {
+      throw new Error("Exam grades can only be recorded after submission");
+    }
+    const exam = current.state.exam;
+    if (exam.status === "graded") {
+      throw new Error("Exam has already been graded");
+    }
+
+    const draftIds = new Set(Object.keys(exam.drafts));
+    if (grades.length !== draftIds.size) {
+      throw new Error("Exam grades must exactly cover submitted drafts");
+    }
+
+    const gradedIds = new Set<string>();
+    for (const grade of grades) {
+      if (!draftIds.has(grade.questionId)) {
+        throw new Error(
+          `Grade references unknown exam question: ${grade.questionId}`,
+        );
+      }
+      if (gradedIds.has(grade.questionId)) {
+        throw new Error(`Duplicate grade for question: ${grade.questionId}`);
+      }
+      gradedIds.add(grade.questionId);
+    }
+
+    if (gradedIds.size !== draftIds.size) {
+      throw new Error("Exam grades must exactly cover submitted drafts");
+    }
+
+    const history = await this.store.getHistory(course.id);
+    const reviewedAt = this.clock.now();
+
+    await this.store.commitHistory(
+      course.id,
+      history.revision,
+      this.operationId(),
+      (currentHistory) => {
+        let nextHistory = {
+          ...currentHistory,
+          revision: currentHistory.revision + 1,
+          attempts: [...currentHistory.attempts],
+        };
+
+        for (const grade of grades) {
+          const question = exam.items.find(
+            ({ id }) => id === grade.questionId,
+          )!;
+          const draftEntry = exam.drafts[grade.questionId]!;
+          const attempt = {
+            id: this.ids.next("attempt"),
+            operationId: this.operationId(),
+            question,
+            mode: "exam" as const,
+            submittedAt: draftEntry.submittedAt,
+            answer: draftEntry.answer,
+            confidence: draftEntry.confidence,
+            unaidedAtSubmission: true,
+            highestHintLevel: 0 as const,
+            revealed: false,
+            correctness: grade.correctness as Correctness,
+            gradingRationale: grade.gradingRationale,
+            ...(grade.misconception === undefined
+              ? {}
+              : { misconception: grade.misconception }),
+          };
+          nextHistory.attempts.push(attempt);
+
+          const progress = nextHistory.concepts[question.targetConceptId] ?? {
+            misconceptions: [],
+          };
+          const trackName = trackForAttempt(attempt);
+          const updatedTrack =
+            trackName === undefined
+              ? undefined
+              : this.scheduler.apply(
+                  progress[trackName],
+                  grade.correctness,
+                  reviewedAt,
+                );
+
+          nextHistory = {
+            ...nextHistory,
+            concepts: {
+              ...nextHistory.concepts,
+              [question.targetConceptId]: {
+                ...progress,
+                ...(trackName === undefined || updatedTrack === undefined
+                  ? {}
+                  : { [trackName]: updatedTrack }),
+                misconceptions:
+                  grade.misconception === undefined
+                    ? progress.misconceptions
+                    : [
+                        ...progress.misconceptions,
+                        {
+                          text: grade.misconception,
+                          sourceRef: question.sourceRefs[0],
+                          lastSeenAt: reviewedAt.toISOString(),
+                        },
+                      ],
+              },
+            },
+          };
+        }
+
+        return nextHistory;
+      },
+    );
+
+    return activity(
+      transition(current.state, {
+        type: "examGraded",
       }),
     );
   }

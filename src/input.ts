@@ -95,12 +95,6 @@ export function parseExamDraft(
     return finalError;
   }
 
-  for (const itemId of itemIds) {
-    if (!Object.hasOwn(drafts, itemId)) {
-      return error(`Missing exam draft: ${itemId}`);
-    }
-  }
-
   return { drafts };
 }
 

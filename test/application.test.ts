@@ -335,3 +335,137 @@ test("selects an existing course as an idle activity", async () => {
     state: { tag: "idle", courseId: course.id },
   });
 });
+
+test("keeps extracted concepts pending until a learner approves them", async () => {
+  const { app, course } = await createApp();
+  const sourceRefs = [
+    {
+      materialId: "material-1",
+      path: "/courses/physics/notes.md",
+      locator: "# newton-laws",
+    },
+  ];
+
+  const proposed = await app.proposeConcepts(course.id, [
+    { id: "newton-laws", name: "Newton's laws", sourceRefs },
+  ]);
+  expect(proposed.concepts).toEqual([{ id: "kinematics", name: "Kinematics" }]);
+  expect(proposed.proposedConcepts).toHaveLength(1);
+
+  const approved = await app.approveConcepts(course.id, ["newton-laws"]);
+  expect(approved.concepts).toMatchObject([
+    { id: "kinematics", name: "Kinematics" },
+    { id: "newton-laws", name: "Newton's laws" },
+  ]);
+  expect(approved.proposedConcepts).toEqual([]);
+});
+
+test("rejects a concept proposal whose source is not configured", async () => {
+  const { app, course } = await createApp();
+
+  await expect(
+    app.proposeConcepts(course.id, [
+      {
+        id: "bad",
+        name: "Bad",
+        sourceRefs: [
+          { materialId: "missing", path: "/tmp/missing.md", locator: "# x" },
+        ],
+      },
+    ]),
+  ).rejects.toThrow("Unknown source material: missing");
+});
+
+test("records a complete submitted exam as independently scheduled evidence", async () => {
+  const { app, course, store } = await createApp();
+  const examQuestion = {
+    id: "exam-q-1",
+    kind: "exam" as const,
+    targetConceptId: "kinematics",
+    prompt: "Explain acceleration.",
+    sourceRefs: [
+      {
+        materialId: "material-1",
+        path: "/courses/physics/notes.md",
+        locator: "# acceleration",
+      },
+    ],
+  };
+  const presented = await app.recordExam(
+    await app.requestMode(course.id, "exam"),
+    {
+      id: "exam-1",
+      operationId: "exam-operation-1",
+      startedAt: now.toISOString(),
+      status: "active",
+      items: [examQuestion],
+      drafts: {
+        "exam-q-1": {
+          answer: "Acceleration changes velocity.",
+          confidence: 80,
+          submittedAt: now.toISOString(),
+        },
+      },
+    },
+  );
+  const submitted = await app.submitExam(presented);
+
+  const next = await app.recordExamGrades(submitted, [
+    {
+      questionId: "exam-q-1",
+      correctness: "correct",
+      gradingRationale: "Complete",
+    },
+  ]);
+
+  expect(next.state).toMatchObject({
+    tag: "exam-submitted",
+    exam: { status: "graded" },
+  });
+  expect((await store.getHistory(course.id)).attempts).toMatchObject([
+    {
+      question: { id: "exam-q-1" },
+      mode: "exam",
+      unaidedAtSubmission: true,
+      correctness: "correct",
+    },
+  ]);
+});
+
+test("rejects aggregate grades that do not exactly cover submitted drafts", async () => {
+  const { app, course } = await createApp();
+  const examQuestion = {
+    id: "exam-q-1",
+    kind: "exam" as const,
+    targetConceptId: "kinematics",
+    prompt: "Explain acceleration.",
+    sourceRefs: [
+      {
+        materialId: "material-1",
+        path: "/courses/physics/notes.md",
+        locator: "# acceleration",
+      },
+    ],
+  };
+  const presented = await app.recordExam(
+    await app.requestMode(course.id, "exam"),
+    {
+      id: "exam-1",
+      operationId: "exam-operation-1",
+      startedAt: now.toISOString(),
+      status: "active",
+      items: [examQuestion],
+      drafts: {
+        "exam-q-1": {
+          answer: "Acceleration changes velocity.",
+          confidence: 80,
+          submittedAt: now.toISOString(),
+        },
+      },
+    },
+  );
+
+  await expect(
+    app.recordExamGrades(await app.submitExam(presented), []),
+  ).rejects.toThrow("Exam grades must exactly cover submitted drafts");
+});

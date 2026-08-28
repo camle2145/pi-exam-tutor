@@ -69,7 +69,16 @@ export interface CourseMaterial {
 export interface CourseConcept {
   id: string;
   name: string;
+  parentId?: string;
   profileId?: string;
+}
+
+/** A model-proposed, source-cited concept that awaits learner approval. */
+export interface CourseConceptProposal {
+  id: string;
+  name: string;
+  parentId?: string;
+  sourceRefs: SourceReference[];
 }
 
 export interface Course {
@@ -82,6 +91,7 @@ export interface Course {
   partialAnswerPolicy: PartialAnswerPolicy;
   materials: CourseMaterial[];
   concepts: CourseConcept[];
+  proposedConcepts: CourseConceptProposal[];
 }
 
 export interface LearningHistory {
@@ -113,6 +123,13 @@ export interface ModeOptions {
 export interface Submission {
   answer: string;
   confidence: number;
+}
+
+export interface ExamGrade {
+  questionId: string;
+  correctness: Correctness;
+  gradingRationale: string;
+  misconception?: string;
 }
 
 export interface ParseError {
@@ -239,6 +256,24 @@ export function assertCourseInvariant(course: Course): void {
   assertNormalizedMaterialPaths(course.materials);
   assertUniqueMaterialPaths(course.materials);
   assertUniqueConceptIds(course.concepts);
+  assertUniqueConceptIds(course.proposedConcepts);
+
+  const conceptIds = new Set(course.concepts.map(({ id }) => id));
+  for (const proposal of course.proposedConcepts) {
+    if (conceptIds.has(proposal.id)) {
+      throw new Error(`Duplicate concept id: ${proposal.id}`);
+    }
+    conceptIds.add(proposal.id);
+    assertNonEmptyString(proposal.name, "Concept name");
+    assertSourceReferences(course, proposal.sourceRefs, "Concept proposal");
+  }
+
+  for (const concept of [...course.concepts, ...course.proposedConcepts]) {
+    if (concept.parentId === undefined) continue;
+    if (concept.parentId === concept.id || !conceptIds.has(concept.parentId)) {
+      throw new Error(`Unknown parent concept: ${concept.parentId}`);
+    }
+  }
 }
 
 export function assertQuestion(course: Course, question: Question): void {
@@ -248,11 +283,19 @@ export function assertQuestion(course: Course, question: Question): void {
     throw new Error(`Unknown target concept: ${question.targetConceptId}`);
   }
 
-  if (question.sourceRefs.length === 0) {
-    throw new Error("Question must reference at least one configured material");
+  assertSourceReferences(course, question.sourceRefs, "Question");
+}
+
+function assertSourceReferences(
+  course: Course,
+  sourceRefs: readonly SourceReference[],
+  owner: string,
+): void {
+  if (sourceRefs.length === 0) {
+    throw new Error(`${owner} must reference at least one configured material`);
   }
 
-  for (const sourceRef of question.sourceRefs) {
+  for (const sourceRef of sourceRefs) {
     const material = course.materials.find(
       ({ id }) => id === sourceRef.materialId,
     );
@@ -264,6 +307,7 @@ export function assertQuestion(course: Course, question: Question): void {
     if (sourceRef.path !== material.path) {
       throw new Error("Source path is not configured for this course");
     }
+    assertNonEmptyString(sourceRef.locator, "Source locator");
   }
 }
 
@@ -299,7 +343,9 @@ function assertUniqueMaterialPaths(materials: readonly CourseMaterial[]): void {
   );
 }
 
-function assertUniqueConceptIds(concepts: readonly CourseConcept[]): void {
+function assertUniqueConceptIds(
+  concepts: readonly Pick<CourseConcept, "id">[],
+): void {
   assertUnique(
     concepts.map(({ id }) => id),
     "Duplicate concept id",
@@ -313,6 +359,12 @@ function assertUnique(values: readonly string[], errorPrefix: string): void {
       throw new Error(`${errorPrefix}: ${value}`);
     }
     seen.add(value);
+  }
+}
+
+function assertNonEmptyString(value: string, label: string): void {
+  if (value.trim() === "") {
+    throw new Error(`${label} must not be empty`);
   }
 }
 
