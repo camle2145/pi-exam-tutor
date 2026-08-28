@@ -76,7 +76,14 @@ test("records a branch retry instead of overwriting the original attempt", async
     question,
   );
 
-  await app.acceptSubmission(activity, { answer: "x", confidence: 50 });
+  const original = await app.acceptSubmission(activity, {
+    answer: "x",
+    confidence: 50,
+  });
+  await app.recordGrade(original, {
+    correctness: "correct",
+    gradingRationale: "Correct.",
+  });
   await app.acceptSubmission(activity, { answer: "x", confidence: 50 });
 
   const attempts = (await store.getHistory(course.id)).attempts;
@@ -122,6 +129,65 @@ test("restores an activity snapshot without losing global course evidence", asyn
 
   expect(restored).toEqual(activity);
   expect((await store.getHistory(course.id)).attempts).toHaveLength(1);
+});
+
+test("restores a valid exam-generating activity snapshot", async () => {
+  const { app, course } = await createApp();
+  const activity = await app.requestMode(course.id, "exam");
+
+  expect(app.restoreActivity(app.serializeActivity(activity))).toEqual(
+    activity,
+  );
+});
+
+test("rejects adversarial activity snapshots before restoring them", async () => {
+  const { app } = await createApp();
+
+  expect(() =>
+    app.restoreActivity(
+      JSON.stringify({ schemaVersion: 1, state: { tag: "bad" } }),
+    ),
+  ).toThrow("Invalid activity snapshot");
+  expect(() =>
+    app.restoreActivity(
+      JSON.stringify({
+        schemaVersion: 1,
+        state: {
+          tag: "awaiting-primary-answer",
+          courseId: "course-1",
+          mode: "exam",
+          question: { id: "question-1" },
+          hintLevel: 7,
+          revealed: "false",
+        },
+      }),
+    ),
+  ).toThrow("Invalid activity snapshot");
+});
+
+test("records a model-delivered reveal solution before requesting explanation", async () => {
+  const { app, course, store, question } = await createApp();
+  const requested = await app.requestReveal(
+    await app.recordQuestion(
+      await app.requestMode(course.id, "study"),
+      question,
+    ),
+  );
+
+  const next = await app.recordSolution(requested);
+
+  expect(next.state).toMatchObject({
+    tag: "awaiting-explanation",
+    reason: "reveal",
+  });
+  const transfer = await app.recordExplanation(next, "I can now explain it.");
+  expect(transfer.state.tag).toBe("awaiting-transfer");
+  const [attempt] = (await store.getHistory(course.id)).attempts;
+  expect(attempt).toMatchObject({
+    revealed: true,
+    highestHintLevel: 0,
+    selfExplanation: "I can now explain it.",
+  });
 });
 
 test("selects an existing course as an idle activity", async () => {

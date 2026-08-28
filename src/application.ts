@@ -55,6 +55,7 @@ export interface TutorApplication {
     level: Exclude<HintLevel, 0>,
   ): Promise<SessionActivity>;
   requestReveal(activity: SessionActivity): Promise<SessionActivity>;
+  recordSolution(activity: SessionActivity): Promise<SessionActivity>;
   recordGrade(
     activity: SessionActivity,
     grade: Grade,
@@ -171,7 +172,6 @@ export class TutorApplicationService implements TutorApplication {
       (attempt) =>
         attempt.question.id === details.question.id &&
         attempt.mode === details.mode &&
-        attempt.correctness === undefined &&
         attempt.highestHintLevel === details.hintLevel &&
         attempt.revealed === details.revealed,
     );
@@ -225,6 +225,50 @@ export class TutorApplicationService implements TutorApplication {
   async requestReveal(current: SessionActivity): Promise<SessionActivity> {
     await this.courseFor(current);
     return activity(transition(current.state, { type: "revealRequested" }));
+  }
+
+  async recordSolution(current: SessionActivity): Promise<SessionActivity> {
+    const course = await this.courseFor(current);
+    if (current.state.tag !== "reveal-requested") {
+      throw new Error("A solution is not currently requested");
+    }
+    const state = current.state;
+    assertQuestion(course, state.question);
+
+    const attemptId = this.ids.next("attempt");
+    const operationId = this.operationId();
+    const next = transition(state, {
+      type: "solutionPresented",
+      attemptId,
+    });
+    const history = await this.store.getHistory(course.id);
+    const submittedAt = this.clock.now().toISOString();
+
+    await this.store.commitHistory(
+      course.id,
+      history.revision,
+      operationId,
+      (currentHistory) => ({
+        ...currentHistory,
+        revision: currentHistory.revision + 1,
+        attempts: [
+          ...currentHistory.attempts,
+          {
+            id: attemptId,
+            operationId,
+            question: state.question,
+            mode: state.mode,
+            submittedAt,
+            answer: "",
+            confidence: 0,
+            unaidedAtSubmission: false,
+            highestHintLevel: state.hintLevel,
+            revealed: true,
+          },
+        ],
+      }),
+    );
+    return activity(next);
   }
 
   async recordGrade(
@@ -537,15 +581,173 @@ function assertGrade(grade: Grade): void {
 }
 
 function assertActivity(value: unknown): asserts value is SessionActivity {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !Object.hasOwn(value, "schemaVersion") ||
-    !Object.hasOwn(value, "state") ||
-    (value as { schemaVersion: unknown }).schemaVersion !== 1 ||
-    typeof (value as { state: unknown }).state !== "object" ||
-    (value as { state: unknown }).state === null
-  ) {
-    throw new Error("Invalid activity snapshot");
+  if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.state)) {
+    invalidActivity();
   }
+
+  const state = value.state;
+  switch (state.tag) {
+    case "idle":
+      if (state.courseId !== undefined) assertNonEmptyString(state.courseId);
+      return;
+    case "awaiting-question":
+      assertCourseModeState(state, true);
+      assertNonEmptyString(state.operationId);
+      return;
+    case "awaiting-primary-answer":
+      assertCourseModeState(state, true);
+      assertActivityQuestion(state.question);
+      assertHintLevel(state.hintLevel);
+      assertBoolean(state.revealed);
+      return;
+    case "awaiting-grade":
+      assertCourseModeState(state, true);
+      assertNonEmptyString(state.attemptId);
+      assertOneOf(state.purpose, ["primary", "transfer", "explanation"]);
+      assertActivityQuestion(state.question);
+      assertHintLevel(state.hintLevel);
+      return;
+    case "hint-requested":
+      assertCourseModeState(state, true);
+      assertActivityQuestion(state.question);
+      assertHintLevel(state.nextHintLevel, false);
+      assertBoolean(state.revealed);
+      return;
+    case "reveal-requested":
+      assertCourseModeState(state, true);
+      assertActivityQuestion(state.question);
+      assertHintLevel(state.hintLevel);
+      return;
+    case "awaiting-correction":
+      assertCourseModeState(state, true);
+      assertNonEmptyString(state.attemptId);
+      assertActivityQuestion(state.question);
+      assertHintLevel(state.hintLevel);
+      return;
+    case "awaiting-explanation":
+      assertCourseModeState(state, true);
+      assertNonEmptyString(state.attemptId);
+      assertActivityQuestion(state.question);
+      assertOneOf(state.reason, ["error", "reveal"]);
+      return;
+    case "awaiting-transfer":
+      assertCourseModeState(state, true);
+      assertNonEmptyString(state.parentAttemptId);
+      assertNonEmptyString(state.operationId);
+      return;
+    case "exam-generating":
+      assertCourseId(state);
+      assertNonEmptyString(state.operationId);
+      assertIsoTimestamp(state.startedAt);
+      if (state.deadlineAt !== undefined) assertIsoTimestamp(state.deadlineAt);
+      return;
+    case "exam-active":
+    case "exam-submitted":
+      assertCourseId(state);
+      assertExamSession(state.exam);
+      return;
+    default:
+      invalidActivity();
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertCourseModeState(
+  state: Record<string, unknown>,
+  nonExamMode: boolean,
+): void {
+  assertCourseId(state);
+  assertOneOf(
+    state.mode,
+    nonExamMode ? ["study", "drill", "review"] : ["exam"],
+  );
+}
+
+function assertCourseId(state: Record<string, unknown>): void {
+  assertNonEmptyString(state.courseId);
+}
+
+function assertActivityQuestion(value: unknown): void {
+  if (!isRecord(value)) invalidActivity();
+  assertNonEmptyString(value.id);
+  assertOneOf(value.kind, ["primary", "transfer", "exam"]);
+  assertNonEmptyString(value.targetConceptId);
+  assertNonEmptyString(value.prompt);
+  if (!Array.isArray(value.sourceRefs) || value.sourceRefs.length === 0) {
+    invalidActivity();
+  }
+  for (const sourceRef of value.sourceRefs) {
+    if (!isRecord(sourceRef)) invalidActivity();
+    assertNonEmptyString(sourceRef.materialId);
+    assertNonEmptyString(sourceRef.path);
+    assertNonEmptyString(sourceRef.locator);
+  }
+}
+
+function assertExamSession(value: unknown): void {
+  if (!isRecord(value)) invalidActivity();
+  assertNonEmptyString(value.id);
+  assertNonEmptyString(value.operationId);
+  assertIsoTimestamp(value.startedAt);
+  if (value.deadlineAt !== undefined) assertIsoTimestamp(value.deadlineAt);
+  if (value.submittedAt !== undefined) assertIsoTimestamp(value.submittedAt);
+  assertOneOf(value.status, ["active", "submitted", "expired", "graded"]);
+  if (!Array.isArray(value.items)) invalidActivity();
+  const itemIds = new Set<string>();
+  for (const question of value.items) {
+    assertActivityQuestion(question);
+    if (question.kind !== "exam" || itemIds.has(question.id)) invalidActivity();
+    itemIds.add(question.id);
+  }
+  if (!isRecord(value.drafts)) invalidActivity();
+  for (const [questionId, draft] of Object.entries(value.drafts)) {
+    if (!itemIds.has(questionId)) invalidActivity();
+    if (!isRecord(draft)) invalidActivity();
+    assertNonEmptyString(draft.answer);
+    if (
+      typeof draft.confidence !== "number" ||
+      !Number.isFinite(draft.confidence) ||
+      draft.confidence < 0 ||
+      draft.confidence > 100
+    ) {
+      invalidActivity();
+    }
+    assertIsoTimestamp(draft.submittedAt);
+  }
+}
+
+function assertHintLevel(value: unknown, allowZero = true): void {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < (allowZero ? 0 : 1) ||
+    value > 6
+  ) {
+    invalidActivity();
+  }
+}
+
+function assertIsoTimestamp(value: unknown): void {
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) {
+    invalidActivity();
+  }
+}
+
+function assertBoolean(value: unknown): void {
+  if (typeof value !== "boolean") invalidActivity();
+}
+
+function assertNonEmptyString(value: unknown): void {
+  if (typeof value !== "string" || value.trim() === "") invalidActivity();
+}
+
+function assertOneOf(value: unknown, allowed: readonly string[]): void {
+  if (typeof value !== "string" || !allowed.includes(value)) invalidActivity();
+}
+
+function invalidActivity(): never {
+  throw new Error("Invalid activity snapshot");
 }
