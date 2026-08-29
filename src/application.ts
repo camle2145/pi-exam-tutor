@@ -438,7 +438,15 @@ export class TutorApplicationService implements TutorApplication {
     exam: ExamSession,
   ): Promise<SessionActivity> {
     const course = await this.courseFor(current);
+    if (exam.items.length === 0) {
+      throw new Error("Exam must contain at least one question");
+    }
+    const itemIds = new Set<string>();
     for (const question of exam.items) {
+      if (itemIds.has(question.id)) {
+        throw new Error(`Duplicate exam question id: ${question.id}`);
+      }
+      itemIds.add(question.id);
       assertQuestion(course, question);
       if (question.kind !== "exam") {
         throw new Error("Exam items must be exam questions");
@@ -489,10 +497,7 @@ export class TutorApplicationService implements TutorApplication {
 
     const course = await this.store.getCourse(courseId);
 
-    const allIds = new Set([
-      ...course.concepts.map(({ id }) => id),
-      ...course.proposedConcepts.map(({ id }) => id),
-    ]);
+    const allIds = new Set(course.concepts.map(({ id }) => id));
     for (const proposal of proposals) {
       if (allIds.has(proposal.id)) {
         throw new Error(`Duplicate concept id: ${proposal.id}`);
@@ -525,7 +530,7 @@ export class TutorApplicationService implements TutorApplication {
     const next: Course = {
       ...course,
       revision: course.revision + 1,
-      proposedConcepts: [...course.proposedConcepts, ...proposals],
+      proposedConcepts: [...proposals],
     };
     assertCourseInvariant(next);
     return this.store.saveCourse(next, course.revision, this.operationId());

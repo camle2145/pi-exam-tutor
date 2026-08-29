@@ -349,6 +349,13 @@ test("requests cited concept extraction after adding a material", async () => {
       }),
     }),
   );
+  expect(fake.sentMessages).toContainEqual(
+    expect.objectContaining({
+      message: expect.objectContaining({
+        content: expect.stringContaining('"id":"material-1"'),
+      }),
+    }),
+  );
 });
 
 test("keeps proposed concepts pending until an explicit approve command", async () => {
@@ -398,6 +405,16 @@ test("locks every mode-changing command while an exam is active", async () => {
   await expect(fake.invokeCommand("hint")).rejects.toThrow(
     "Finish the active exam",
   );
+  for (const args of [
+    "create Other",
+    "select course-1",
+    "add /courses/physics/new.md",
+    "concepts approve newton-laws",
+  ]) {
+    await expect(fake.invokeCommand("course", args)).rejects.toThrow(
+      "Finish the active exam",
+    );
+  }
 });
 
 test("sends actual-ID draft answers only after exam submission", async () => {
@@ -635,6 +652,8 @@ test("restores only the latest branch-local activity and injects its prompt", as
     JSON.stringify(awaitingAnswer),
   );
   expect(result.systemPrompt).toContain("base prompt");
+  expect(result.systemPrompt).toContain('"id":"kinematics"');
+  expect(result.systemPrompt).toContain('"name":"Kinematics"');
   expect(result.systemPrompt).toContain("untrusted reference content");
   expect(result.systemPrompt).toContain("current hint level is 0");
 });

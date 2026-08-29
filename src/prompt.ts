@@ -10,7 +10,8 @@ export function buildTutorPrompt(
     "Ask a closed-book, free-response question before teaching. Require a committed answer and 0–100 confidence before marking.",
     "Cite a configured material path and locator in every question/grade.",
     `Selected course: ${course.name} (${course.id}).`,
-    `Configured material paths: ${course.materials.map(({ path }) => path).join(", ") || "none"}.`,
+    `Configured materials: ${JSON.stringify(course.materials.map(({ id, path }) => ({ id, path })))}.`,
+    `Approved concepts: ${JSON.stringify(course.concepts.map(({ id, name, parentId }) => ({ id, name, ...(parentId === undefined ? {} : { parentId }) })))}.`,
     stateInstruction(activity),
   ].join("\n\n");
 }

@@ -269,12 +269,14 @@ export function assertCourseInvariant(course: Course): void {
     assertSourceReferences(course, proposal.sourceRefs, "Concept proposal");
   }
 
-  for (const concept of [...course.concepts, ...course.proposedConcepts]) {
+  const concepts = [...course.concepts, ...course.proposedConcepts];
+  for (const concept of concepts) {
     if (concept.parentId === undefined) continue;
     if (concept.parentId === concept.id || !conceptIds.has(concept.parentId)) {
       throw new Error(`Unknown parent concept: ${concept.parentId}`);
     }
   }
+  assertAcyclicConceptParents(concepts);
 }
 
 export function assertQuestion(course: Course, question: Question): void {
@@ -285,6 +287,25 @@ export function assertQuestion(course: Course, question: Question): void {
   }
 
   assertSourceReferences(course, question.sourceRefs, "Question");
+}
+
+function assertAcyclicConceptParents(
+  concepts: readonly Pick<CourseConcept, "id" | "parentId">[],
+): void {
+  const parents = new Map(
+    concepts.map(({ id, parentId }) => [id, parentId] as const),
+  );
+  for (const { id } of concepts) {
+    const seen = new Set<string>();
+    let current: string | undefined = id;
+    while (current !== undefined) {
+      if (seen.has(current)) {
+        throw new Error(`Concept parent cycle: ${id}`);
+      }
+      seen.add(current);
+      current = parents.get(current);
+    }
+  }
 }
 
 function assertSourceReferences(

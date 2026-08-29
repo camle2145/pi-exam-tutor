@@ -1,5 +1,9 @@
 import { expect, test } from "vitest";
-import { type Course, type Question } from "../src/domain.js";
+import {
+  assertCourseInvariant,
+  type Course,
+  type Question,
+} from "../src/domain.js";
 import { TutorApplicationService } from "../src/application.js";
 import { buildDashboard } from "../src/dashboard.js";
 import { FakeClock, SequenceIds, tempRoot } from "./helpers.js";
@@ -616,6 +620,75 @@ test("rejects aggregate grades that do not exactly cover submitted drafts", asyn
     app.recordExamGrades(await app.submitExam(presented), []),
   ).rejects.toThrow("Exam grades must exactly cover submitted drafts");
 });
+
+test("replaces stale pending concepts with a fresh extraction batch", async () => {
+  const { app, course } = await createApp();
+  const sourceRefs = [
+    {
+      materialId: "material-1",
+      path: "/courses/physics/notes.md",
+      locator: "# x",
+    },
+  ];
+  await app.proposeConcepts(course.id, [
+    { id: "stale", name: "Stale", sourceRefs },
+  ]);
+
+  const replaced = await app.proposeConcepts(course.id, [
+    { id: "fresh", name: "Fresh", sourceRefs },
+  ]);
+
+  expect(replaced.proposedConcepts).toEqual([
+    { id: "fresh", name: "Fresh", sourceRefs },
+  ]);
+});
+
+test("rejects duplicate exam question IDs before activating an exam", async () => {
+  const { app, course, question } = await createApp();
+  const examQuestion = { ...question, id: "duplicate", kind: "exam" as const };
+
+  await expect(
+    app.recordExam(await app.requestMode(course.id, "exam"), {
+      id: "exam-duplicates",
+      operationId: "operation-duplicates",
+      startedAt: now.toISOString(),
+      status: "active",
+      items: [examQuestion, examQuestion],
+      drafts: {},
+    }),
+  ).rejects.toThrow("Duplicate exam question id: duplicate");
+});
+
+test("rejects multi-node concept parent cycles", async () => {
+  const { course } = await createApp();
+  expect(() =>
+    assertCourseInvariant({
+      ...course,
+      proposedConcepts: [
+        {
+          id: "a",
+          name: "A",
+          parentId: "b",
+          sourceRefs: [questionSource(course)],
+        },
+        {
+          id: "b",
+          name: "B",
+          parentId: "a",
+          sourceRefs: [questionSource(course)],
+        },
+      ],
+    }),
+  ).toThrow("Concept parent cycle");
+});
+
+function questionSource(course: Course) {
+  return {
+    materialId: course.materials[0]!.id,
+    path: course.materials[0]!.path,
+    locator: "# cycle",
+  };
+}
 
 test("clears a pending concept parent only when explicitly requested", async () => {
   const { app, course } = await createApp();
