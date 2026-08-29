@@ -12,6 +12,8 @@ import {
 import type { Course, Dashboard, SessionActivity } from "./domain.js";
 
 export const DASHBOARD_MESSAGE_TYPE = "pi-exam-tutor/dashboard-v1";
+export const CONCEPT_PROPOSALS_MESSAGE_TYPE =
+  "pi-exam-tutor/concept-proposals-v1";
 const UI_KEY = "exam-tutor";
 
 export function updateTutorStatus(
@@ -58,6 +60,77 @@ export async function showDashboard(
   );
 }
 
+export async function showConceptProposals(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  course: Course,
+): Promise<void> {
+  const text = conceptProposalText(course);
+  if (ctx.mode !== "tui") {
+    pi.sendMessage(
+      {
+        customType: CONCEPT_PROPOSALS_MESSAGE_TYPE,
+        content: text,
+        display: true,
+        details: { courseId: course.id },
+      },
+      { triggerTurn: false, deliverAs: "nextTurn" },
+    );
+    return;
+  }
+  await ctx.ui.custom<void>(
+    (_tui, theme, _keybindings, done) =>
+      new ConceptProposalsComponent(text, theme, () => done()),
+  );
+}
+
+export function conceptProposalText(course: Course): string {
+  if (course.proposedConcepts.length === 0) {
+    return "No pending concept proposals.";
+  }
+  const lines = ["Pending concept proposals:"];
+  for (const material of course.materials) {
+    const proposalIds = new Set(
+      course.proposedConcepts
+        .filter((proposal) =>
+          proposal.sourceRefs.some(
+            ({ materialId }) => materialId === material.id,
+          ),
+        )
+        .map(({ id }) => id),
+    );
+    if (proposalIds.size === 0) continue;
+    lines.push(material.path);
+    const children = new Map<
+      string | undefined,
+      typeof course.proposedConcepts
+    >();
+    for (const proposal of course.proposedConcepts.filter(({ id }) =>
+      proposalIds.has(id),
+    )) {
+      const parentId =
+        proposal.parentId !== undefined && proposalIds.has(proposal.parentId)
+          ? proposal.parentId
+          : undefined;
+      children.set(parentId, [...(children.get(parentId) ?? []), proposal]);
+    }
+    const append = (parentId: string | undefined, depth: number): void => {
+      for (const proposal of children.get(parentId) ?? []) {
+        const locators = proposal.sourceRefs
+          .filter(({ materialId }) => materialId === material.id)
+          .map(({ locator }) => locator)
+          .join(", ");
+        lines.push(
+          `${"  ".repeat(depth)}- ${proposal.name} (${proposal.id}) — ${locators}`,
+        );
+        append(proposal.id, depth + 1);
+      }
+    };
+    append(undefined, 1);
+  }
+  return lines.join("\n");
+}
+
 export function dashboardText(course: Course, dashboard: Dashboard): string {
   const calibration = dashboard.confidenceCalibration
     .map((bin) => {
@@ -95,6 +168,30 @@ export function dashboardText(course: Course, dashboard: Dashboard): string {
 }
 
 class DashboardComponent extends Container {
+  constructor(
+    text: string,
+    theme: Theme,
+    private readonly close: () => void,
+  ) {
+    super();
+    this.addChild(new Text(theme.fg("accent", theme.bold(text)), 1, 1));
+    this.addChild(
+      new Text(theme.fg("dim", "Press Escape or Ctrl+C to close"), 1, 0),
+    );
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+      this.close();
+    }
+  }
+
+  override render(width: number): string[] {
+    return super.render(width).map((line) => truncateToWidth(line, width));
+  }
+}
+
+class ConceptProposalsComponent extends Container {
   constructor(
     text: string,
     theme: Theme,

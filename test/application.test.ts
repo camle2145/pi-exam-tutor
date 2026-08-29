@@ -616,3 +616,43 @@ test("rejects aggregate grades that do not exactly cover submitted drafts", asyn
     app.recordExamGrades(await app.submitExam(presented), []),
   ).rejects.toThrow("Exam grades must exactly cover submitted drafts");
 });
+
+test("clears a pending concept parent only when explicitly requested", async () => {
+  const { app, course } = await createApp();
+  const proposed = await app.proposeConcepts(course.id, [
+    {
+      id: "laws",
+      name: "Laws",
+      sourceRefs: [
+        {
+          materialId: "material-1",
+          path: "/courses/physics/notes.md",
+          locator: "# laws",
+        },
+      ],
+    },
+    {
+      id: "impulse",
+      name: "Impulse",
+      parentId: "laws",
+      sourceRefs: [
+        {
+          materialId: "material-1",
+          path: "/courses/physics/notes.md",
+          locator: "# impulse",
+        },
+      ],
+    },
+  ]);
+
+  const cleared = await app.editProposedConcept(course.id, "impulse", {
+    parentId: null,
+  });
+
+  expect(
+    proposed.proposedConcepts.find(({ id }) => id === "impulse")?.parentId,
+  ).toBe("laws");
+  expect(
+    cleared.proposedConcepts.find(({ id }) => id === "impulse")?.parentId,
+  ).toBeUndefined();
+});

@@ -82,7 +82,7 @@ export interface TutorApplication {
   editProposedConcept(
     courseId: string,
     conceptId: string,
-    update: { name?: string; parentId?: string },
+    update: { name?: string; parentId?: string | null },
   ): Promise<Course>;
   removeProposedConcept(courseId: string, conceptId: string): Promise<Course>;
   recordExamGrades(
@@ -573,7 +573,7 @@ export class TutorApplicationService implements TutorApplication {
   async editProposedConcept(
     courseId: string,
     conceptId: string,
-    update: { name?: string; parentId?: string },
+    update: { name?: string; parentId?: string | null },
   ): Promise<Course> {
     const course = await this.store.getCourse(courseId);
 
@@ -585,7 +585,11 @@ export class TutorApplicationService implements TutorApplication {
     const merged: CourseConceptProposal = {
       ...byId.get(conceptId)!,
       ...(update.name !== undefined ? { name: update.name } : {}),
-      ...(update.parentId !== undefined ? { parentId: update.parentId } : {}),
+      ...(update.parentId === undefined
+        ? {}
+        : update.parentId === null
+          ? { parentId: undefined }
+          : { parentId: update.parentId }),
     };
 
     const allIds = new Set([

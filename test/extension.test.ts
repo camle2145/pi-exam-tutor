@@ -9,7 +9,9 @@ import extension, {
 import type { TutorApplication } from "../src/application.js";
 import type {
   Course,
+  CourseConceptProposal,
   Dashboard,
+  ExamGrade,
   ExamSession,
   Question,
   SessionActivity,
@@ -33,6 +35,7 @@ const course: Course = {
     },
   ],
   concepts: [{ id: "kinematics", name: "Kinematics" }],
+  proposedConcepts: [],
 };
 const question: Question = {
   id: "question-1",
@@ -69,6 +72,50 @@ const exam: ExamSession = {
   ],
   drafts: {},
 };
+const conceptProposal: CourseConceptProposal = {
+  id: "newton-laws",
+  name: "Newton's laws",
+  sourceRefs: [
+    {
+      materialId: "material-1",
+      path: "/courses/physics/notes.md",
+      locator: "# laws",
+    },
+  ],
+};
+const examGrade: ExamGrade = {
+  questionId: "exam-question-id",
+  correctness: "correct",
+  gradingRationale: "Complete.",
+};
+const examWithActualId: ExamSession = {
+  ...exam,
+  items: [{ ...exam.items[0]!, id: "exam-question-id" }],
+  drafts: {
+    "exam-question-id": {
+      answer: "Acceleration changes velocity.",
+      confidence: 80,
+      submittedAt: now.toISOString(),
+    },
+  },
+};
+const activeExamWithAllDrafts: SessionActivity = {
+  schemaVersion: 1,
+  state: { tag: "exam-active", courseId: course.id, exam: examWithActualId },
+};
+const submittedExam: SessionActivity = {
+  schemaVersion: 1,
+  state: {
+    tag: "exam-submitted",
+    courseId: course.id,
+    exam: {
+      ...examWithActualId,
+      status: "submitted",
+      submittedAt: now.toISOString(),
+    },
+  },
+};
+
 const idle: SessionActivity = {
   schemaVersion: 1,
   state: { tag: "idle", courseId: course.id },
@@ -119,6 +166,14 @@ function createDependencies(
     recordExplanation: vi.fn(async () => idle),
     recordExam: vi.fn(async () => activeExam),
     submitExam: vi.fn(async () => idle),
+    proposeConcepts: vi.fn(async () => ({
+      ...course,
+      proposedConcepts: [conceptProposal],
+    })),
+    approveConcepts: vi.fn(async () => course),
+    editProposedConcept: vi.fn(async () => course),
+    removeProposedConcept: vi.fn(async () => course),
+    recordExamGrades: vi.fn(async () => idle),
     serializeActivity: vi.fn((activity: SessionActivity) =>
       JSON.stringify(activity),
     ),
@@ -266,6 +321,146 @@ function createFakePi(
   };
 }
 
+test("requests cited concept extraction after adding a material", async () => {
+  const fake = createFakePi({ activity: idle });
+  const dependencies = createDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add /courses/physics/slides.pdf");
+
+  expect(dependencies.app.addMaterial).toHaveBeenCalledWith(
+    course.id,
+    "/courses/physics/slides.pdf",
+  );
+  expect(fake.sentMessages).toContainEqual(
+    expect.objectContaining({
+      message: expect.objectContaining({
+        content: expect.stringContaining("tutor_propose_concepts"),
+      }),
+    }),
+  );
+});
+
+test("keeps proposed concepts pending until an explicit approve command", async () => {
+  const fake = createFakePi({ activity: idle });
+  const dependencies = createDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.executeTool("tutor_propose_concepts", {
+    proposals: [conceptProposal],
+  });
+  expect(dependencies.app.proposeConcepts).toHaveBeenCalledWith(course.id, [
+    conceptProposal,
+  ]);
+  await fake.invokeCommand("course", "concepts approve newton-laws");
+  expect(dependencies.app.approveConcepts).toHaveBeenCalledWith(course.id, [
+    "newton-laws",
+  ]);
+});
+
+test("clears a proposed concept parent when the parent command omits its ID", async () => {
+  const fake = createFakePi({ activity: idle });
+  const dependencies = createDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "concepts parent impulse");
+
+  expect(dependencies.app.editProposedConcept).toHaveBeenCalledWith(
+    course.id,
+    "impulse",
+    { parentId: null },
+  );
+});
+
+test("locks every mode-changing command while an exam is active", async () => {
+  const fake = createFakePi({ activity: activeExam });
+  extension(fake.api, createDependencies());
+  await fake.startSession();
+
+  await expect(fake.invokeCommand("study")).rejects.toThrow(
+    "Finish the active exam",
+  );
+  await expect(fake.invokeCommand("study-off")).rejects.toThrow(
+    "Finish the active exam",
+  );
+  await expect(fake.invokeCommand("hint")).rejects.toThrow(
+    "Finish the active exam",
+  );
+});
+
+test("sends actual-ID draft answers only after exam submission", async () => {
+  const fake = createFakePi({ activity: activeExamWithAllDrafts });
+  const dependencies = createDependencies({
+    submitExam: vi.fn(async () => submittedExam),
+  });
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("exam", "submit");
+
+  expect(fake.sentMessages).toContainEqual(
+    expect.objectContaining({
+      message: expect.objectContaining({
+        content: expect.stringContaining("Question ID: exam-question-id"),
+      }),
+    }),
+  );
+  expect(fake.sentMessages).toContainEqual(
+    expect.objectContaining({
+      message: expect.objectContaining({
+        content: expect.stringContaining("[confidence: 80]"),
+      }),
+    }),
+  );
+});
+
+test("records all aggregate exam grades only from the canonical tool", async () => {
+  const fake = createFakePi({ activity: submittedExam });
+  const dependencies = createDependencies({
+    recordExamGrades: vi.fn(async () => idle),
+  });
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.executeTool("tutor_record_exam_grades", { grades: [examGrade] });
+
+  expect(dependencies.app.recordExamGrades).toHaveBeenCalledWith(
+    submittedExam,
+    [examGrade],
+  );
+});
+
+test("upserts a partial exam draft and only notifies after every item is saved", async () => {
+  const twoItemExam: SessionActivity = {
+    schemaVersion: 1,
+    state: {
+      tag: "exam-active",
+      courseId: course.id,
+      exam: {
+        ...exam,
+        items: [exam.items[0]!, { ...exam.items[0]!, id: "second" }],
+      },
+    },
+  };
+  const fake = createFakePi({ activity: twoItemExam });
+  extension(fake.api, createDependencies());
+  await fake.startSession();
+
+  await fake.dispatchInput("1. [confidence: 60]\nFirst");
+  expect(fake.ui.notify).toHaveBeenLastCalledWith(
+    "Exam draft saved locally",
+    "info",
+  );
+  await fake.dispatchInput("second. [confidence: 80]\nSecond");
+  expect(fake.ui.notify).toHaveBeenLastCalledWith(
+    "All answers are saved. Amend any answer or run /exam submit.",
+    "info",
+  );
+});
+
 test("exports a Pi extension factory", () => {
   expect(extension).toBeTypeOf("function");
 });
@@ -296,6 +491,8 @@ test("registers every required tutor command and canonical tool", () => {
       "tutor_present_solution",
       "tutor_record_explanation",
       "tutor_present_transfer",
+      "tutor_propose_concepts",
+      "tutor_record_exam_grades",
     ]),
   );
 });
