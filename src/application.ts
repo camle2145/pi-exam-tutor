@@ -210,6 +210,7 @@ export class TutorApplicationService implements TutorApplication {
           {
             id: attemptId,
             operationId,
+            kind: "answered" as const,
             ...(original === undefined
               ? {}
               : { retryOfAttemptId: original.id }),
@@ -277,6 +278,7 @@ export class TutorApplicationService implements TutorApplication {
           {
             id: attemptId,
             operationId,
+            kind: "answered" as const,
             question: state.question,
             mode: state.mode,
             submittedAt,
@@ -735,6 +737,7 @@ export class TutorApplicationService implements TutorApplication {
           const attempt = {
             id: this.ids.next("attempt"),
             operationId,
+            kind: "answered" as const,
             question,
             mode: "exam" as const,
             submittedAt: draftEntry.submittedAt,

@@ -74,6 +74,21 @@ test("assisted correctness cannot create unassisted mastery evidence", async () 
   expect(progress.assisted?.reviewHistory).toHaveLength(1);
 });
 
+test("persists answered primary submissions with confidence", async () => {
+  const { app, course, store, question } = await createApp();
+  await app.acceptSubmission(
+    await app.recordQuestion(
+      await app.requestMode(course.id, "study"),
+      question,
+    ),
+    { answer: "velocity increases", confidence: 70 },
+  );
+
+  expect((await store.getHistory(course.id)).attempts).toMatchObject([
+    { kind: "answered", confidence: 70 },
+  ]);
+});
+
 test("records a branch retry instead of overwriting the original attempt", async () => {
   const { app, course, store, question } = await createApp();
   const activity = await app.recordQuestion(
@@ -143,6 +158,27 @@ test("restores a valid exam-generating activity snapshot", async () => {
   expect(app.restoreActivity(app.serializeActivity(activity))).toEqual(
     activity,
   );
+});
+
+test("restores an active exam independently of learning-history schema migration", async () => {
+  const { app, course } = await createApp();
+  const activeExam = {
+    schemaVersion: 1 as const,
+    state: {
+      tag: "exam-active" as const,
+      courseId: course.id,
+      exam: {
+        id: "exam-1",
+        operationId: "op-exam",
+        startedAt: now.toISOString(),
+        status: "active" as const,
+        items: [],
+        drafts: {},
+      },
+    },
+  };
+
+  expect(() => app.restoreActivity(JSON.stringify(activeExam))).not.toThrow();
 });
 
 test("rejects adversarial activity snapshots before restoring them", async () => {
@@ -277,7 +313,7 @@ test("projects unaided evidence, calibration, due tracks, and unresolved misconc
 test("excludes ungradable attempts from calibration and unaided evidence", async () => {
   const { course, question } = await createApp();
   const history = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     courseId: course.id,
     revision: 0,
     appliedOperationIds: [],
@@ -286,6 +322,7 @@ test("excludes ungradable attempts from calibration and unaided evidence", async
       {
         id: "attempt-1",
         operationId: "operation-1",
+        kind: "answered" as const,
         question,
         mode: "study" as const,
         submittedAt: now.toISOString(),
@@ -299,6 +336,7 @@ test("excludes ungradable attempts from calibration and unaided evidence", async
       {
         id: "attempt-2",
         operationId: "operation-2",
+        kind: "answered" as const,
         question,
         mode: "study" as const,
         submittedAt: now.toISOString(),

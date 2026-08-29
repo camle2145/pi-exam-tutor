@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { SequenceIds, tempRoot } from "./helpers.js";
@@ -17,6 +17,145 @@ async function createStore(): Promise<{
   const ids = new SequenceIds();
   return { root, ids, store: new LocalStore(root, ids) };
 }
+
+test("migrates a version-1 answered attempt without changing its evidence", async () => {
+  const { root, store } = await createStore();
+  const course = await store.createCourse("A", "op-create");
+  const history = await store.getHistory(course.id);
+  const question = {
+    id: "question-1",
+    kind: "primary" as const,
+    targetConceptId: "concept-1",
+    prompt: "Question?",
+    sourceRefs: [
+      {
+        materialId: "material-1",
+        path: "/courses/notes.md",
+        locator: "# question",
+      },
+    ],
+  };
+  const attempt = {
+    id: "attempt-1",
+    operationId: "op-attempt",
+    question,
+    mode: "study" as const,
+    submittedAt: "2026-08-27T09:00:00.000Z",
+    unaidedAtSubmission: true,
+    highestHintLevel: 0 as const,
+    revealed: false,
+  };
+  const learningPath = join(root, "courses", course.id, "learning.json");
+
+  await writeFile(
+    learningPath,
+    JSON.stringify({
+      ...history,
+      schemaVersion: 1,
+      attempts: [{ ...attempt, answer: "x", confidence: 70 }],
+    }),
+  );
+
+  const migrated = await store.getHistory(course.id);
+  expect(migrated).toMatchObject({
+    schemaVersion: 2,
+    attempts: [{ kind: "answered", answer: "x", confidence: 70 }],
+  });
+  expect(JSON.parse(await readFile(learningPath, "utf8"))).toMatchObject({
+    schemaVersion: 1,
+  });
+
+  await store.commitHistory(
+    course.id,
+    migrated.revision,
+    "op-migrate",
+    (value) => ({ ...value, revision: value.revision + 1 }),
+  );
+  expect(JSON.parse(await readFile(learningPath, "utf8"))).toMatchObject({
+    schemaVersion: 2,
+    attempts: [{ kind: "answered", answer: "x", confidence: 70 }],
+  });
+});
+
+test("accepts an unanswered attempt without an answer or confidence", async () => {
+  const { store } = await createStore();
+  const course = await store.createCourse("A", "op-create");
+  const question = {
+    id: "question-1",
+    kind: "exam" as const,
+    targetConceptId: "concept-1",
+    prompt: "Question?",
+    sourceRefs: [
+      {
+        materialId: "material-1",
+        path: "/courses/notes.md",
+        locator: "# question",
+      },
+    ],
+  };
+
+  const saved = await store.commitHistory(
+    course.id,
+    0,
+    "op-blank",
+    (value) => ({
+      ...value,
+      revision: 1,
+      attempts: [
+        {
+          id: "attempt-blank",
+          operationId: "op-blank",
+          kind: "unanswered" as const,
+          question,
+          mode: "exam" as const,
+          submittedAt: "2026-08-27T09:00:00.000Z",
+          unaidedAtSubmission: true,
+          highestHintLevel: 0 as const,
+          revealed: false,
+          omissionReason: "manual-partial" as const,
+        },
+      ],
+    }),
+  );
+
+  expect(saved.attempts[0]).toMatchObject({ kind: "unanswered" });
+});
+
+test("rejects an unanswered attempt that carries confidence", async () => {
+  const { root, store } = await createStore();
+  const course = await store.createCourse("A", "op-create");
+  await writeFile(
+    join(root, "courses", course.id, "learning.json"),
+    JSON.stringify({
+      ...(await store.getHistory(course.id)),
+      attempts: [
+        {
+          id: "attempt-blank",
+          operationId: "op-blank",
+          kind: "unanswered",
+          question: {
+            id: "question-1",
+            kind: "exam",
+            targetConceptId: "concept-1",
+            prompt: "Question?",
+            sourceRefs: [],
+          },
+          mode: "exam",
+          submittedAt: "2026-08-27T09:00:00.000Z",
+          confidence: 0,
+          unaidedAtSubmission: true,
+          highestHintLevel: 0,
+          revealed: false,
+          omissionReason: "manual-partial",
+        },
+      ],
+    }),
+  );
+
+  await expect(store.getHistory(course.id)).rejects.toThrow(
+    "Invalid learning history",
+  );
+});
 
 test("persists course history across fresh store instances", async () => {
   const { root, ids, store: first } = await createStore();

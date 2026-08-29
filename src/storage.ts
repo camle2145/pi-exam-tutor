@@ -22,6 +22,7 @@ import {
 import type { IdGenerator } from "./clock.js";
 
 const SCHEMA_VERSION = 1;
+const LEARNING_HISTORY_SCHEMA_VERSION = 2;
 const MAX_APPLIED_OPERATION_IDS = 100;
 const LOCK_RETRY_COUNT = 50;
 const LOCK_RETRY_DELAY_MS = 10;
@@ -265,13 +266,13 @@ export class LocalStore implements Store {
       this.historyPath(courseId),
       "learning history",
     );
-    assertHistory(decoded);
-    if (decoded.courseId !== courseId) {
+    const history = migrateLearningHistory(decoded);
+    if (history.courseId !== courseId) {
       throw new Error(
         "Invalid learning history: course ID does not match its path",
       );
     }
-    return decoded;
+    return history;
   }
 
   private async readJson(
@@ -374,8 +375,8 @@ export class LocalStore implements Store {
         );
         return;
       }
-      assertHistory(decoded);
-      if (decoded.courseId !== courseId) {
+      const history = migrateLearningHistory(decoded);
+      if (history.courseId !== courseId) {
         throw new Error(
           "Invalid learning history: course ID does not match its path",
         );
@@ -478,7 +479,7 @@ function emptyCatalog(): CourseCatalog {
 
 function emptyHistory(courseId: string): LearningHistory {
   return {
-    schemaVersion: SCHEMA_VERSION,
+    schemaVersion: LEARNING_HISTORY_SCHEMA_VERSION,
     courseId,
     revision: 0,
     appliedOperationIds: [],
@@ -563,11 +564,28 @@ function assertCourse(value: unknown): asserts value is Course {
   }
 }
 
+function migrateLearningHistory(value: unknown): LearningHistory {
+  const migrated =
+    isRecord(value) && value.schemaVersion === 1
+      ? {
+          ...value,
+          schemaVersion: LEARNING_HISTORY_SCHEMA_VERSION,
+          attempts: Array.isArray(value.attempts)
+            ? value.attempts.map((attempt) =>
+                isRecord(attempt) ? { ...attempt, kind: "answered" } : attempt,
+              )
+            : value.attempts,
+        }
+      : value;
+  assertHistory(migrated);
+  return migrated;
+}
+
 function assertHistory(value: unknown): asserts value is LearningHistory {
   try {
     if (
       !isRecord(value) ||
-      value.schemaVersion !== SCHEMA_VERSION ||
+      value.schemaVersion !== LEARNING_HISTORY_SCHEMA_VERSION ||
       !isCourseId(value.courseId) ||
       !isRevision(value.revision) ||
       !isOperationIds(value.appliedOperationIds) ||
@@ -614,8 +632,30 @@ function isCourseConceptProposal(value: unknown): boolean {
 }
 
 function isAttempt(value: unknown): value is Attempt {
+  if (!isRecord(value) || !isAttemptBase(value)) {
+    return false;
+  }
+
+  if (value.kind === "answered") {
+    return (
+      typeof value.answer === "string" &&
+      (value.confidence === undefined ||
+        typeof value.confidence === "number") &&
+      !Object.hasOwn(value, "omissionReason")
+    );
+  }
+
   return (
-    isRecord(value) &&
+    value.kind === "unanswered" &&
+    !Object.hasOwn(value, "answer") &&
+    !Object.hasOwn(value, "confidence") &&
+    (value.omissionReason === "manual-partial" ||
+      value.omissionReason === "deadline")
+  );
+}
+
+function isAttemptBase(value: Record<string, unknown>): boolean {
+  return (
     typeof value.id === "string" &&
     typeof value.operationId === "string" &&
     (value.retryOfAttemptId === undefined ||
@@ -623,8 +663,6 @@ function isAttempt(value: unknown): value is Attempt {
     isQuestion(value.question) &&
     isTutorMode(value.mode) &&
     typeof value.submittedAt === "string" &&
-    typeof value.answer === "string" &&
-    typeof value.confidence === "number" &&
     typeof value.unaidedAtSubmission === "boolean" &&
     isHintLevel(value.highestHintLevel) &&
     typeof value.revealed === "boolean" &&

@@ -21,15 +21,15 @@ export interface Question {
   sourceRefs: SourceReference[];
 }
 
-export interface Attempt {
+export type OmissionReason = "manual-partial" | "deadline";
+
+interface AttemptBase {
   id: string;
   operationId: string;
   retryOfAttemptId?: string;
   question: Question;
   mode: TutorMode;
   submittedAt: string;
-  answer: string;
-  confidence: number;
   unaidedAtSubmission: boolean;
   highestHintLevel: HintLevel;
   revealed: boolean;
@@ -38,6 +38,25 @@ export interface Attempt {
   misconception?: string;
   selfExplanation?: string;
   transferAttemptId?: string;
+}
+
+export interface AnsweredAttempt extends AttemptBase {
+  kind: "answered";
+  answer: string;
+  confidence?: number;
+}
+
+export interface UnansweredAttempt extends AttemptBase {
+  kind: "unanswered";
+  omissionReason: OmissionReason;
+}
+
+export type Attempt = AnsweredAttempt | UnansweredAttempt;
+
+export function isAnsweredAttempt(
+  attempt: Attempt,
+): attempt is AnsweredAttempt {
+  return attempt.kind === "answered";
 }
 
 export interface FsrsTrack {
@@ -95,7 +114,7 @@ export interface Course {
 }
 
 export interface LearningHistory {
-  schemaVersion: 1;
+  schemaVersion: 2;
   courseId: string;
   revision: number;
   appliedOperationIds: string[];

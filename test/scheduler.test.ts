@@ -5,6 +5,7 @@ import { scheduler, trackForAttempt } from "../src/scheduler.js";
 const attempt: Attempt = {
   id: "attempt-1",
   operationId: "operation-1",
+  kind: "answered",
   question: {
     id: "question-1",
     kind: "primary",

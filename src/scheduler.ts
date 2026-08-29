@@ -11,6 +11,7 @@ import type {
   FsrsTrack,
   FsrsTrackName,
 } from "./domain.js";
+import { isAnsweredAttempt } from "./domain.js";
 
 export interface Scheduler {
   apply(
@@ -69,6 +70,10 @@ export const scheduler: Scheduler = {
 };
 
 export function trackForAttempt(attempt: Attempt): FsrsTrackName | undefined {
+  if (!isAnsweredAttempt(attempt)) {
+    return undefined;
+  }
+
   if (
     attempt.correctness === undefined ||
     attempt.correctness === "ungradable"
