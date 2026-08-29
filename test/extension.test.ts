@@ -749,6 +749,37 @@ test("present-exam rejects an invalid state before calling the application", asy
   expect(recordExam).not.toHaveBeenCalled();
 });
 
+test("present-exam rejects duplicate generated item IDs without persisting", async () => {
+  const generatingExam: SessionActivity = {
+    schemaVersion: 1,
+    state: {
+      tag: "exam-generating",
+      courseId: course.id,
+      operationId: "operation-duplicate",
+      startedAt: now.toISOString(),
+    },
+  };
+  const recordExam = vi.fn(async () => {
+    throw new Error("Duplicate exam item ID: duplicate");
+  });
+  const duplicateItems = [
+    { ...exam.items[0]!, id: "duplicate" },
+    { ...exam.items[0]!, id: "duplicate" },
+  ];
+  const fake = createFakePi({ activity: generatingExam });
+  extension(fake.api, createDependencies({ recordExam }));
+  await fake.startSession();
+
+  await expect(
+    fake.executeTool("tutor_present_exam", { items: duplicateItems }),
+  ).rejects.toThrow("Duplicate exam item ID: duplicate");
+  expect(recordExam).toHaveBeenCalledWith(
+    generatingExam,
+    expect.objectContaining({ items: duplicateItems }),
+  );
+  expect(fake.appendedEntries).toEqual([]);
+});
+
 test("custom tool renderer exposes canonical learner-facing feedback", async () => {
   const fake = createFakePi({ activity: awaitingGrade });
   extension(
