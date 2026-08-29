@@ -531,7 +531,7 @@ function withDefaultPartialAnswerPolicy(value: unknown): unknown {
 }
 
 function withDefaultProposedConcepts(value: unknown): unknown {
-  if (isRecord(value) && !Array.isArray(value.proposedConcepts)) {
+  if (isRecord(value) && !Object.hasOwn(value, "proposedConcepts")) {
     return { ...value, proposedConcepts: [] };
   }
   return value;

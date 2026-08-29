@@ -659,6 +659,10 @@ export class TutorApplicationService implements TutorApplication {
       throw new Error("Exam grades must exactly cover submitted drafts");
     }
 
+    const questionsById = new Map(
+      exam.items.map((question) => [question.id, question]),
+    );
+    const submittedQuestions = new Map<string, Question>();
     const gradedIds = new Set<string>();
     for (const grade of grades) {
       if (!draftIds.has(grade.questionId)) {
@@ -669,7 +673,15 @@ export class TutorApplicationService implements TutorApplication {
       if (gradedIds.has(grade.questionId)) {
         throw new Error(`Duplicate grade for question: ${grade.questionId}`);
       }
+      const question = questionsById.get(grade.questionId);
+      if (question === undefined) {
+        throw new Error(
+          `Grade references an exam item that was not submitted: ${grade.questionId}`,
+        );
+      }
+      assertQuestion(course, question);
       gradedIds.add(grade.questionId);
+      submittedQuestions.set(grade.questionId, question);
     }
 
     if (gradedIds.size !== draftIds.size) {
@@ -678,11 +690,12 @@ export class TutorApplicationService implements TutorApplication {
 
     const history = await this.store.getHistory(course.id);
     const reviewedAt = this.clock.now();
+    const operationId = this.operationId();
 
     await this.store.commitHistory(
       course.id,
       history.revision,
-      this.operationId(),
+      operationId,
       (currentHistory) => {
         let nextHistory = {
           ...currentHistory,
@@ -691,13 +704,16 @@ export class TutorApplicationService implements TutorApplication {
         };
 
         for (const grade of grades) {
-          const question = exam.items.find(
-            ({ id }) => id === grade.questionId,
-          )!;
+          const question = submittedQuestions.get(grade.questionId);
+          if (question === undefined) {
+            throw new Error(
+              `Grade references an exam item that was not submitted: ${grade.questionId}`,
+            );
+          }
           const draftEntry = exam.drafts[grade.questionId]!;
           const attempt = {
             id: this.ids.next("attempt"),
-            operationId: this.operationId(),
+            operationId,
             question,
             mode: "exam" as const,
             submittedAt: draftEntry.submittedAt,

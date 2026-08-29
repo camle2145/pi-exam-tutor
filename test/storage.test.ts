@@ -181,6 +181,58 @@ test("defaults a legacy persisted course without a partial-answer policy", async
   });
 });
 
+test("defaults only absent proposed concepts and rejects malformed proposals", async () => {
+  const { root, store } = await createStore();
+  const course = await store.createCourse("A", "op-create");
+  const coursePath = join(root, "courses", course.id, "course.json");
+  const legacyCourse: Record<string, unknown> = { ...course };
+  delete legacyCourse.proposedConcepts;
+  await writeFile(coursePath, JSON.stringify(legacyCourse));
+
+  await expect(store.getCourse(course.id)).resolves.toMatchObject({
+    proposedConcepts: [],
+  });
+
+  await writeFile(
+    coursePath,
+    JSON.stringify({ ...course, proposedConcepts: { invalid: true } }),
+  );
+  await expect(store.getCourse(course.id)).rejects.toThrow("Invalid course");
+});
+
+test("rejects persisted proposals with empty IDs", async () => {
+  const { root, store } = await createStore();
+  const course = await store.createCourse("A", "op-create");
+  await writeFile(
+    join(root, "courses", course.id, "course.json"),
+    JSON.stringify({
+      ...course,
+      materials: [
+        {
+          id: "material-1",
+          path: "/courses/notes.md",
+          addedAt: "2026-08-27T09:00:00.000Z",
+        },
+      ],
+      proposedConcepts: [
+        {
+          id: "",
+          name: "Invalid",
+          sourceRefs: [
+            {
+              materialId: "material-1",
+              path: "/courses/notes.md",
+              locator: "# invalid",
+            },
+          ],
+        },
+      ],
+    }),
+  );
+
+  await expect(store.getCourse(course.id)).rejects.toThrow("Invalid course");
+});
+
 test("rejects a persisted course with an invalid partial-answer policy", async () => {
   const { root, store } = await createStore();
   const course = await store.createCourse("A", "op-create");

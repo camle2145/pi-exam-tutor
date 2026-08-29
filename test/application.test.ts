@@ -432,6 +432,153 @@ test("records a complete submitted exam as independently scheduled evidence", as
   ]);
 });
 
+test("records all aggregate exam attempts with one operation ID", async () => {
+  const { app, course, store } = await createApp();
+  const examQuestions = ["one", "two"].map((id) => ({
+    id,
+    kind: "exam" as const,
+    targetConceptId: "kinematics",
+    prompt: `Explain ${id}.`,
+    sourceRefs: [
+      {
+        materialId: "material-1",
+        path: "/courses/physics/notes.md",
+        locator: `# ${id}`,
+      },
+    ],
+  }));
+  const presented = await app.recordExam(
+    await app.requestMode(course.id, "exam"),
+    {
+      id: "exam-aggregate",
+      operationId: "exam-operation-aggregate",
+      startedAt: now.toISOString(),
+      status: "active",
+      items: examQuestions,
+      drafts: Object.fromEntries(
+        examQuestions.map(({ id }) => [
+          id,
+          {
+            answer: `Answer ${id}.`,
+            confidence: 80,
+            submittedAt: now.toISOString(),
+          },
+        ]),
+      ),
+    },
+  );
+
+  await app.recordExamGrades(await app.submitExam(presented), [
+    { questionId: "one", correctness: "correct", gradingRationale: "Complete" },
+    {
+      questionId: "two",
+      correctness: "partial",
+      gradingRationale: "Mostly complete",
+    },
+  ]);
+
+  const history = await store.getHistory(course.id);
+  const operationIds = new Set(
+    history.attempts.map(({ operationId }) => operationId),
+  );
+  expect([...operationIds]).toHaveLength(1);
+  expect(history.appliedOperationIds).toEqual([...operationIds]);
+});
+
+test("rejects malformed restored exam drafts without recording evidence", async () => {
+  const { app, course, store } = await createApp();
+  const activity = await app.requestMode(course.id, "exam");
+  const malformed = {
+    schemaVersion: 1,
+    state: {
+      tag: "exam-submitted" as const,
+      courseId: course.id,
+      exam: {
+        id: "exam-malformed",
+        operationId: "exam-operation-malformed",
+        startedAt: now.toISOString(),
+        status: "submitted" as const,
+        items: [],
+        drafts: {
+          missing: {
+            answer: "Answer.",
+            confidence: 80,
+            submittedAt: now.toISOString(),
+          },
+        },
+      },
+    },
+  };
+
+  expect(() => app.restoreActivity(JSON.stringify(malformed))).toThrow(
+    "Invalid activity snapshot",
+  );
+  expect((await store.getHistory(course.id)).attempts).toEqual([]);
+  expect(activity.state.tag).toBe("exam-generating");
+});
+
+test("revalidates restored exam questions before recording evidence", async () => {
+  const { app, course, store } = await createApp();
+  const presented = await app.recordExam(
+    await app.requestMode(course.id, "exam"),
+    {
+      id: "exam-restored",
+      operationId: "exam-operation-restored",
+      startedAt: now.toISOString(),
+      status: "active",
+      items: [
+        {
+          id: "exam-q",
+          kind: "exam",
+          targetConceptId: "kinematics",
+          prompt: "Explain acceleration.",
+          sourceRefs: [
+            {
+              materialId: "material-1",
+              path: "/courses/physics/notes.md",
+              locator: "# acceleration",
+            },
+          ],
+        },
+      ],
+      drafts: {
+        "exam-q": {
+          answer: "Acceleration changes velocity.",
+          confidence: 80,
+          submittedAt: now.toISOString(),
+        },
+      },
+    },
+  );
+  const submitted = await app.submitExam(presented);
+  const restored = {
+    ...submitted,
+    state: {
+      ...submitted.state,
+      exam: {
+        ...submitted.state.exam,
+        items: submitted.state.exam.items.map((question) => ({
+          ...question,
+          sourceRefs: [
+            { ...question.sourceRefs[0]!, path: "/outside/course.md" },
+          ],
+        })),
+      },
+    },
+  };
+
+  await expect(
+    app.recordExamGrades(restored, [
+      {
+        questionId: "exam-q",
+        correctness: "correct",
+        gradingRationale: "Complete",
+      },
+    ]),
+  ).rejects.toThrow("Source path is not configured for this course");
+  expect((await store.getHistory(course.id)).attempts).toEqual([]);
+});
+
 test("rejects aggregate grades that do not exactly cover submitted drafts", async () => {
   const { app, course } = await createApp();
   const examQuestion = {

@@ -264,6 +264,7 @@ export function assertCourseInvariant(course: Course): void {
       throw new Error(`Duplicate concept id: ${proposal.id}`);
     }
     conceptIds.add(proposal.id);
+    assertNonEmptyString(proposal.id, "Concept ID");
     assertNonEmptyString(proposal.name, "Concept name");
     assertSourceReferences(course, proposal.sourceRefs, "Concept proposal");
   }
