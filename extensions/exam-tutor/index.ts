@@ -696,7 +696,7 @@ function registerTools(
     label: "Tutor exam grades",
     description: "Record aggregate grades for a submitted exam only.",
     parameters: Type.Object({
-      grades: Type.Array(examGradeSchema, { minItems: 1 }),
+      grades: Type.Array(examGradeSchema),
     }),
     executionMode: "sequential",
     async execute(_id, params, _signal, _update, ctx) {

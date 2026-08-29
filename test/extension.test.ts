@@ -229,7 +229,12 @@ function createFakePi(
   >();
   const tools = new Map<
     string,
-    { execute: Function; renderResult?: Function; executionMode?: string }
+    {
+      execute: Function;
+      renderResult?: Function;
+      executionMode?: string;
+      parameters?: unknown;
+    }
   >();
   const handlers = new Map<string, Function[]>();
   const appendedEntries: Array<{ customType: string; data: unknown }> = [];
@@ -265,7 +270,11 @@ function createFakePi(
     registerCommand(name: string, definition: { handler: Function }) {
       commands.set(name, definition);
     },
-    registerTool(definition: { name: string; execute: Function }) {
+    registerTool(definition: {
+      name: string;
+      execute: Function;
+      parameters?: unknown;
+    }) {
       tools.set(definition.name, definition);
     },
     on(name: string, handler: Function) {
@@ -430,6 +439,40 @@ test("records all aggregate exam grades only from the canonical tool", async () 
   expect(dependencies.app.recordExamGrades).toHaveBeenCalledWith(
     submittedExam,
     [examGrade],
+  );
+});
+
+test("accepts an empty aggregate grade array for an exam with no drafts", async () => {
+  const zeroDraftExam: SessionActivity = {
+    schemaVersion: 1,
+    state: {
+      tag: "exam-submitted",
+      courseId: course.id,
+      exam: {
+        ...exam,
+        status: "submitted",
+        submittedAt: now.toISOString(),
+        drafts: {},
+      },
+    },
+  };
+  const fake = createFakePi({ activity: zeroDraftExam });
+  const dependencies = createDependencies({
+    recordExamGrades: vi.fn(async () => idle),
+  });
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  const tool = fake.tool("tutor_record_exam_grades") as {
+    parameters: { properties: { grades: { minItems?: number } } };
+  };
+  expect(tool.parameters.properties.grades.minItems).toBeUndefined();
+
+  await fake.executeTool("tutor_record_exam_grades", { grades: [] });
+
+  expect(dependencies.app.recordExamGrades).toHaveBeenCalledWith(
+    zeroDraftExam,
+    [],
   );
 });
 
