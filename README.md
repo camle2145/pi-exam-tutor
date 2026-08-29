@@ -1,7 +1,6 @@
 # pi-exam-tutor
 
-A Pi package for exam tutoring. This package provides a Pi extension and skills;
-its tutor core is added in subsequent development tasks.
+A local-first Pi package for exam tutoring. It provides a Pi extension, reusable Agent Skill, and a durable tutor core for source-cited retrieval practice and exam submission.
 
 ## Answer and exam-draft syntax
 

@@ -82,6 +82,17 @@ test("accepts a partial exam-draft update for later amendment", () => {
   });
 });
 
+test("stores prototype-sensitive draft IDs as own null-prototype properties", () => {
+  const parsed = parseExamDraft("__proto__. [confidence: 60]\nAnswer", [
+    "__proto__",
+  ]);
+
+  if ("message" in parsed) throw new Error(parsed.message);
+  expect(Object.getPrototypeOf(parsed.drafts)).toBeNull();
+  expect(Object.hasOwn(parsed.drafts, "__proto__")).toBe(true);
+  expect(parsed.drafts.__proto__).toEqual({ confidence: 60, answer: "Answer" });
+});
+
 test("rejects malformed, unknown, and duplicate exam drafts", () => {
   expect(
     parseExamDraft("1. [confidence: 60]\nA\n1. [confidence: 70]\nB", ["1"]),

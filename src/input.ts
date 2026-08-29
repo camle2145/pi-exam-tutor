@@ -35,7 +35,7 @@ export function parseExamDraft(
   }
 
   const configuredIds = new Set(itemIds);
-  const drafts: Record<string, Submission> = {};
+  const drafts = Object.create(null) as Record<string, Submission>;
   const lines = text.split(/\r?\n/);
   let questionId: string | undefined;
   let confidence: number | undefined;

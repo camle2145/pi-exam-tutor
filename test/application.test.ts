@@ -659,6 +659,66 @@ test("rejects duplicate exam question IDs before activating an exam", async () =
   ).rejects.toThrow("Duplicate exam question id: duplicate");
 });
 
+test("rejects unsafe exam question IDs before activating an exam", async () => {
+  const { app, course, question } = await createApp();
+
+  for (const id of ["", "line\nbreak", "__proto__"]) {
+    await expect(
+      app.recordExam(await app.requestMode(course.id, "exam"), {
+        id: "exam-unsafe-id",
+        operationId: "operation-unsafe-id",
+        startedAt: now.toISOString(),
+        status: "active",
+        items: [{ ...question, id, kind: "exam" }],
+        drafts: {},
+      }),
+    ).rejects.toThrow("Exam question ID is not safe for draft syntax");
+  }
+});
+
+test("rejects malformed exam submission states before they can be restored or graded", async () => {
+  const { app, course, store } = await createApp();
+  const malformed = {
+    schemaVersion: 1,
+    state: {
+      tag: "exam-submitted",
+      courseId: course.id,
+      exam: {
+        id: "exam-invalid-boundary",
+        operationId: "operation-invalid-boundary",
+        startedAt: now.toISOString(),
+        status: "active",
+        items: [],
+        drafts: {},
+      },
+    },
+  };
+
+  expect(() => app.restoreActivity(JSON.stringify(malformed))).toThrow(
+    "Invalid activity snapshot",
+  );
+  expect(() =>
+    app.restoreActivity(
+      JSON.stringify({
+        ...malformed,
+        state: {
+          ...malformed.state,
+          tag: "exam-active",
+          exam: {
+            ...malformed.state.exam,
+            status: "submitted",
+            submittedAt: now.toISOString(),
+          },
+        },
+      }),
+    ),
+  ).toThrow("Invalid activity snapshot");
+  await expect(app.recordExamGrades(malformed, [])).rejects.toThrow(
+    "Invalid activity snapshot",
+  );
+  expect((await store.getHistory(course.id)).attempts).toEqual([]);
+});
+
 test("rejects multi-node concept parent cycles", async () => {
   const { course } = await createApp();
   expect(() =>

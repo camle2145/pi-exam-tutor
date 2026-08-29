@@ -3,6 +3,7 @@ import type { Clock, IdGenerator } from "./clock.js";
 import {
   assertCourseInvariant,
   assertQuestion,
+  isGrammarSafeExamQuestionId,
   type ActivityState,
   type Correctness,
   type Course,
@@ -443,6 +444,11 @@ export class TutorApplicationService implements TutorApplication {
     }
     const itemIds = new Set<string>();
     for (const question of exam.items) {
+      if (!isGrammarSafeExamQuestionId(question.id)) {
+        throw new Error(
+          `Exam question ID is not safe for draft syntax: ${question.id}`,
+        );
+      }
       if (itemIds.has(question.id)) {
         throw new Error(`Duplicate exam question id: ${question.id}`);
       }
@@ -661,6 +667,12 @@ export class TutorApplicationService implements TutorApplication {
     const exam = current.state.exam;
     if (exam.status === "graded") {
       throw new Error("Exam has already been graded");
+    }
+    if (
+      (exam.status !== "submitted" && exam.status !== "expired") ||
+      exam.submittedAt === undefined
+    ) {
+      throw new Error("Exam grades can only be recorded after submission");
     }
 
     const draftIds = new Set(Object.keys(exam.drafts));
@@ -987,9 +999,24 @@ function assertActivity(value: unknown): asserts value is SessionActivity {
       if (state.deadlineAt !== undefined) assertIsoTimestamp(state.deadlineAt);
       return;
     case "exam-active":
+      assertCourseId(state);
+      assertExamSession(state.exam);
+      if (
+        state.exam.status !== "active" ||
+        state.exam.submittedAt !== undefined
+      ) {
+        invalidActivity();
+      }
+      return;
     case "exam-submitted":
       assertCourseId(state);
       assertExamSession(state.exam);
+      if (
+        !["submitted", "expired", "graded"].includes(state.exam.status) ||
+        state.exam.submittedAt === undefined
+      ) {
+        invalidActivity();
+      }
       return;
     default:
       invalidActivity();
@@ -1032,7 +1059,7 @@ function assertActivityQuestion(value: unknown): void {
   }
 }
 
-function assertExamSession(value: unknown): void {
+function assertExamSession(value: unknown): asserts value is ExamSession {
   if (!isRecord(value)) invalidActivity();
   assertNonEmptyString(value.id);
   assertNonEmptyString(value.operationId);
@@ -1044,7 +1071,13 @@ function assertExamSession(value: unknown): void {
   const itemIds = new Set<string>();
   for (const question of value.items) {
     assertActivityQuestion(question);
-    if (question.kind !== "exam" || itemIds.has(question.id)) invalidActivity();
+    if (
+      question.kind !== "exam" ||
+      !isGrammarSafeExamQuestionId(question.id) ||
+      itemIds.has(question.id)
+    ) {
+      invalidActivity();
+    }
     itemIds.add(question.id);
   }
   if (!isRecord(value.drafts)) invalidActivity();

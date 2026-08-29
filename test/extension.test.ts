@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -393,18 +394,26 @@ test("clears a proposed concept parent when the parent command omits its ID", as
 
 test("locks every mode-changing command while an exam is active", async () => {
   const fake = createFakePi({ activity: activeExam });
-  extension(fake.api, createDependencies());
+  extension(
+    fake.api,
+    createDependencies({ submitExam: vi.fn(async () => submittedExam) }),
+  );
   await fake.startSession();
 
-  await expect(fake.invokeCommand("study")).rejects.toThrow(
-    "Finish the active exam",
-  );
-  await expect(fake.invokeCommand("study-off")).rejects.toThrow(
-    "Finish the active exam",
-  );
-  await expect(fake.invokeCommand("hint")).rejects.toThrow(
-    "Finish the active exam",
-  );
+  for (const [command, args] of [
+    ["study", ""],
+    ["drill", ""],
+    ["review", ""],
+    ["exam", ""],
+    ["hint", ""],
+    ["reveal", ""],
+    ["dashboard", ""],
+    ["study-off", ""],
+  ]) {
+    await expect(fake.invokeCommand(command, args)).rejects.toThrow(
+      "Finish the active exam",
+    );
+  }
   for (const args of [
     "create Other",
     "select course-1",
@@ -415,6 +424,7 @@ test("locks every mode-changing command while an exam is active", async () => {
       "Finish the active exam",
     );
   }
+  await expect(fake.invokeCommand("exam", "submit")).resolves.toBeUndefined();
 });
 
 test("sends actual-ID draft answers only after exam submission", async () => {
@@ -523,6 +533,21 @@ test("upserts a partial exam draft and only notifies after every item is saved",
 
 test("exports a Pi extension factory", () => {
   expect(extension).toBeTypeOf("function");
+});
+
+test("documents the reusable closed-book tutor protocol", async () => {
+  const [skill, protocol] = await Promise.all([
+    readFile("skills/exam-tutor/SKILL.md", "utf8"),
+    readFile("skills/exam-tutor/references/protocol.md", "utf8"),
+  ]);
+
+  expect(skill).toContain("name: exam-tutor");
+  expect(skill).toContain("closed-book");
+  expect(skill).toContain("untrusted reference content");
+  expect(skill).toContain("assisted output");
+  expect(protocol).toContain("Hint level 6");
+  expect(protocol).toContain("/exam submit");
+  expect(protocol).toContain("/reveal");
 });
 
 test("registers every required tutor command and canonical tool", () => {

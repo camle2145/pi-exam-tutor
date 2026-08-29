@@ -289,6 +289,16 @@ export function assertQuestion(course: Course, question: Question): void {
   assertSourceReferences(course, question.sourceRefs, "Question");
 }
 
+/** True when an ID is safe in the line-oriented exam-draft header grammar. */
+export function isGrammarSafeExamQuestionId(id: string): boolean {
+  return (
+    id.trim() !== "" &&
+    id === id.trim() &&
+    !/[\r\n]/.test(id) &&
+    !["__proto__", "constructor", "prototype"].includes(id)
+  );
+}
+
 function assertAcyclicConceptParents(
   concepts: readonly Pick<CourseConcept, "id" | "parentId">[],
 ): void {

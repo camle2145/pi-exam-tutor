@@ -448,6 +448,7 @@ function registerCommands(pi: ExtensionAPI, runtime: CommandRuntime): void {
   pi.registerCommand("dashboard", {
     description: "Show local learning evidence",
     handler: async (_args, ctx) => {
+      assertExamUnlocked(runtime.getActivity());
       const courseId = runtime.selectedCourseId();
       const [course, history] = await Promise.all([
         runtime.store.getCourse(courseId),
