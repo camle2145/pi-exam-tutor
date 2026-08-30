@@ -149,6 +149,15 @@ export function dashboardText(course: Course, dashboard: Dashboard): string {
       : dashboard.misconceptions
           .map(({ conceptId, text }) => `${conceptId}: ${text}`)
           .join("\n");
+  const unansweredExamItems =
+    dashboard.unansweredExamItems.length === 0
+      ? "none"
+      : dashboard.unansweredExamItems
+          .map(
+            ({ questionId, conceptId, omissionReason }) =>
+              `${questionId} (${conceptId}): ${omissionReason}`,
+          )
+          .join("\n");
   const mae =
     dashboard.confidenceMeanAbsoluteError === undefined
       ? "not available"
@@ -164,6 +173,8 @@ export function dashboardText(course: Course, dashboard: Dashboard): string {
     `Assistance: ${dashboard.hintReliance.assistedAttempts}/${dashboard.hintReliance.totalAttempts} attempts; maximum hint level ${dashboard.maximumHintLevel}`,
     "Unresolved misconceptions:",
     misconceptions,
+    "Unanswered exam items:",
+    unansweredExamItems,
   ].join("\n");
 }
 

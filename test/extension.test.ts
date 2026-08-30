@@ -196,6 +196,7 @@ function createDependencies(
     maximumHintLevel: 0,
     hintReliance: { assistedAttempts: 0, totalAttempts: 0 },
     misconceptions: [],
+    unansweredExamItems: [],
   };
   const store = {
     listCourses: vi.fn(async () => [course]),

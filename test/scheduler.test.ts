@@ -47,6 +47,30 @@ test("routes hinted work only to assisted", () => {
   expect(trackForAttempt({ ...attempt, revealed: true })).toBe("assisted");
 });
 
+test("routes an unanswered exam item to the unaided review track", () => {
+  const unansweredAttempt: Attempt = {
+    id: "attempt-blank",
+    operationId: "operation-blank",
+    kind: "unanswered",
+    question: { ...attempt.question, kind: "exam" },
+    mode: "exam",
+    submittedAt: "2026-08-27T09:00:00.000Z",
+    unaidedAtSubmission: true,
+    highestHintLevel: 0,
+    revealed: false,
+    omissionReason: "manual-partial",
+  };
+
+  expect(trackForAttempt(unansweredAttempt)).toBe("unassisted");
+  expect(
+    scheduler.applyAttempt(
+      undefined,
+      unansweredAttempt,
+      new Date("2026-08-27T09:00:00.000Z"),
+    )?.reviewHistory[0],
+  ).toMatchObject({ rating: "Again" });
+});
+
 test("keeps card values JSON-compatible and returns its due date", () => {
   const now = new Date("2026-08-27T09:00:00.000Z");
   const updated = scheduler.apply(undefined, "partial", now)!;

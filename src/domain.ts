@@ -180,6 +180,11 @@ export interface Dashboard {
   maximumHintLevel: HintLevel;
   hintReliance: { assistedAttempts: number; totalAttempts: number };
   misconceptions: Array<{ conceptId: string; text: string }>;
+  unansweredExamItems: Array<{
+    questionId: string;
+    conceptId: string;
+    omissionReason: OmissionReason;
+  }>;
 }
 
 export type ActivityState =

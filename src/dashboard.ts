@@ -64,6 +64,17 @@ export function buildDashboard(
           .filter((misconception) => misconception.resolvedAt === undefined)
           .map(({ text }) => ({ conceptId, text })),
     ),
+    unansweredExamItems: history.attempts.flatMap((attempt) =>
+      attempt.kind === "unanswered" && attempt.mode === "exam"
+        ? [
+            {
+              questionId: attempt.question.id,
+              conceptId: attempt.question.targetConceptId,
+              omissionReason: attempt.omissionReason,
+            },
+          ]
+        : [],
+    ),
   };
 }
 
