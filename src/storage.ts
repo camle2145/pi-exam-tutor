@@ -641,6 +641,11 @@ function isAttempt(value: unknown): value is Attempt {
       typeof value.answer === "string" &&
       (value.confidence === undefined ||
         typeof value.confidence === "number") &&
+      (value.correctness === undefined || isCorrectness(value.correctness)) &&
+      (value.gradingRationale === undefined ||
+        typeof value.gradingRationale === "string") &&
+      (value.misconception === undefined ||
+        typeof value.misconception === "string") &&
       !Object.hasOwn(value, "omissionReason")
     );
   }
@@ -649,6 +654,9 @@ function isAttempt(value: unknown): value is Attempt {
     value.kind === "unanswered" &&
     !Object.hasOwn(value, "answer") &&
     !Object.hasOwn(value, "confidence") &&
+    !Object.hasOwn(value, "correctness") &&
+    !Object.hasOwn(value, "gradingRationale") &&
+    !Object.hasOwn(value, "misconception") &&
     (value.omissionReason === "manual-partial" ||
       value.omissionReason === "deadline")
   );
@@ -666,11 +674,6 @@ function isAttemptBase(value: Record<string, unknown>): boolean {
     typeof value.unaidedAtSubmission === "boolean" &&
     isHintLevel(value.highestHintLevel) &&
     typeof value.revealed === "boolean" &&
-    (value.correctness === undefined || isCorrectness(value.correctness)) &&
-    (value.gradingRationale === undefined ||
-      typeof value.gradingRationale === "string") &&
-    (value.misconception === undefined ||
-      typeof value.misconception === "string") &&
     (value.selfExplanation === undefined ||
       typeof value.selfExplanation === "string") &&
     (value.transferAttemptId === undefined ||

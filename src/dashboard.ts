@@ -30,7 +30,9 @@ export function buildDashboard(
   const gradeableAttempts = history.attempts.filter(isGradeable);
   const unaidedCorrectRetrievalCount = history.attempts.filter(
     (attempt) =>
-      attempt.unaidedAtSubmission && attempt.correctness === "correct",
+      isAnsweredAttempt(attempt) &&
+      attempt.unaidedAtSubmission &&
+      attempt.correctness === "correct",
   ).length;
 
   return {

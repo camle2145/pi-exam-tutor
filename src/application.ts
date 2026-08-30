@@ -3,6 +3,7 @@ import type { Clock, IdGenerator } from "./clock.js";
 import {
   assertCourseInvariant,
   assertQuestion,
+  isAnsweredAttempt,
   isGrammarSafeExamQuestionId,
   type ActivityState,
   type Correctness,
@@ -314,6 +315,9 @@ export class TutorApplicationService implements TutorApplication {
       throw new Error(`Attempt does not exist: ${state.attemptId}`);
     }
     const original = history.attempts[attemptIndex]!;
+    if (!isAnsweredAttempt(original)) {
+      throw new Error(`Attempt cannot be graded: ${original.id}`);
+    }
     if (original.correctness !== undefined) {
       throw new Error(`Attempt is already graded: ${original.id}`);
     }
@@ -345,7 +349,11 @@ export class TutorApplicationService implements TutorApplication {
         const attempt = currentHistory.attempts.find(
           ({ id }) => id === original.id,
         );
-        if (attempt === undefined || attempt.correctness !== undefined) {
+        if (
+          attempt === undefined ||
+          !isAnsweredAttempt(attempt) ||
+          attempt.correctness !== undefined
+        ) {
           throw new Error(`Attempt is already graded: ${original.id}`);
         }
         const updatedAttempt = {

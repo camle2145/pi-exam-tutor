@@ -33,9 +33,6 @@ interface AttemptBase {
   unaidedAtSubmission: boolean;
   highestHintLevel: HintLevel;
   revealed: boolean;
-  correctness?: Correctness;
-  gradingRationale?: string;
-  misconception?: string;
   selfExplanation?: string;
   transferAttemptId?: string;
 }
@@ -44,6 +41,9 @@ export interface AnsweredAttempt extends AttemptBase {
   kind: "answered";
   answer: string;
   confidence?: number;
+  correctness?: Correctness;
+  gradingRationale?: string;
+  misconception?: string;
 }
 
 export interface UnansweredAttempt extends AttemptBase {

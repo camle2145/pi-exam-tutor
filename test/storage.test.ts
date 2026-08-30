@@ -113,12 +113,18 @@ test("accepts an unanswered attempt without an answer or confidence", async () =
           highestHintLevel: 0 as const,
           revealed: false,
           omissionReason: "manual-partial" as const,
+          selfExplanation: "I left this blank.",
+          transferAttemptId: "attempt-transfer",
         },
       ],
     }),
   );
 
-  expect(saved.attempts[0]).toMatchObject({ kind: "unanswered" });
+  expect(saved.attempts[0]).toMatchObject({
+    kind: "unanswered",
+    selfExplanation: "I left this blank.",
+    transferAttemptId: "attempt-transfer",
+  });
 });
 
 test("rejects an unanswered attempt that carries confidence", async () => {
@@ -156,6 +162,49 @@ test("rejects an unanswered attempt that carries confidence", async () => {
     "Invalid learning history",
   );
 });
+
+test.each([
+  ["correctness", "correct"],
+  ["gradingRationale", "Complete."],
+  ["misconception", "Acceleration misconception."],
+])(
+  "rejects an unanswered attempt that carries answered-only %s",
+  async (field, value) => {
+    const { root, store } = await createStore();
+    const course = await store.createCourse("A", "op-create");
+    await writeFile(
+      join(root, "courses", course.id, "learning.json"),
+      JSON.stringify({
+        ...(await store.getHistory(course.id)),
+        attempts: [
+          {
+            id: "attempt-blank",
+            operationId: "op-blank",
+            kind: "unanswered",
+            question: {
+              id: "question-1",
+              kind: "exam",
+              targetConceptId: "concept-1",
+              prompt: "Question?",
+              sourceRefs: [],
+            },
+            mode: "exam",
+            submittedAt: "2026-08-27T09:00:00.000Z",
+            unaidedAtSubmission: true,
+            highestHintLevel: 0,
+            revealed: false,
+            omissionReason: "manual-partial",
+            [field]: value,
+          },
+        ],
+      }),
+    );
+
+    await expect(store.getHistory(course.id)).rejects.toThrow(
+      "Invalid learning history",
+    );
+  },
+);
 
 test("persists course history across fresh store instances", async () => {
   const { root, ids, store: first } = await createStore();
