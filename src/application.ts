@@ -472,17 +472,83 @@ export class TutorApplicationService implements TutorApplication {
   }
 
   async submitExam(current: SessionActivity): Promise<SessionActivity> {
-    await this.courseFor(current);
+    const course = await this.courseFor(current);
+    if (current.state.tag !== "exam-active") {
+      throw new Error("An exam can only be submitted while active");
+    }
+
+    const exam = current.state.exam;
+    for (const question of exam.items) {
+      assertQuestion(course, question);
+    }
     const now = this.clock.now();
-    const deadline =
-      current.state.tag === "exam-active"
-        ? current.state.exam.deadlineAt
-        : undefined;
+    const submittedAt = now.toISOString();
+    const expired =
+      exam.deadlineAt !== undefined && now > new Date(exam.deadlineAt);
+    const omissions = exam.items.filter(
+      ({ id }) => exam.drafts[id] === undefined,
+    );
+
+    if (omissions.length > 0) {
+      const history = await this.store.getHistory(course.id);
+      const operationId = this.operationId();
+      const attempts = omissions.map((question) => ({
+        id: this.ids.next("attempt"),
+        operationId,
+        kind: "unanswered" as const,
+        question,
+        mode: "exam" as const,
+        submittedAt,
+        unaidedAtSubmission: true,
+        highestHintLevel: 0 as const,
+        revealed: false,
+        omissionReason: expired
+          ? ("deadline" as const)
+          : ("manual-partial" as const),
+      }));
+
+      await this.store.commitHistory(
+        course.id,
+        history.revision,
+        operationId,
+        (currentHistory) => {
+          let concepts = currentHistory.concepts;
+          const scheduledConceptIds = new Set<string>();
+          for (const attempt of attempts) {
+            if (scheduledConceptIds.has(attempt.question.targetConceptId)) {
+              continue;
+            }
+            scheduledConceptIds.add(attempt.question.targetConceptId);
+            const conceptId = attempt.question.targetConceptId;
+            const progress = concepts[conceptId] ?? { misconceptions: [] };
+            const unassisted = this.scheduler.apply(
+              progress.unassisted,
+              "incorrect",
+              now,
+            );
+            concepts = {
+              ...concepts,
+              [conceptId]: {
+                ...progress,
+                ...(unassisted === undefined ? {} : { unassisted }),
+              },
+            };
+          }
+          return {
+            ...currentHistory,
+            revision: currentHistory.revision + 1,
+            attempts: [...currentHistory.attempts, ...attempts],
+            concepts,
+          };
+        },
+      );
+    }
+
     return activity(
       transition(current.state, {
         type: "examSubmitted",
-        submittedAt: now.toISOString(),
-        expired: deadline !== undefined && now > new Date(deadline),
+        submittedAt,
+        expired,
       }),
     );
   }
