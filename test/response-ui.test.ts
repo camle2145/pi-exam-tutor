@@ -94,7 +94,7 @@ test("uses editor then numeric input in RPC mode", async () => {
   expect(rpcUi.input).toHaveBeenCalledWith("Confidence (0–100)");
 });
 
-test("does not ask corrections for confidence", async () => {
+test("corrections never request confidence even when the request requires it", async () => {
   const rpcUi = {
     editor: vi.fn().mockResolvedValue("correction"),
     input: vi.fn(),
@@ -104,14 +104,97 @@ test("does not ask corrections for confidence", async () => {
     hasUI: true,
     ui: rpcUi,
   } as unknown as ExtensionContext;
+  const tuiCustom = vi.fn(
+    async (factory) =>
+      new Promise((resolve) => {
+        const component = factory(
+          { requestRender: vi.fn(), terminal: { rows: 40 } },
+          {
+            fg: (_color: string, text: string) => text,
+            borderColor: (text: string) => text,
+          },
+          {},
+          resolve,
+        );
+        component.handleInput("\r");
+      }),
+  );
+  const tuiContext = {
+    mode: "tui",
+    hasUI: true,
+    ui: { custom: tuiCustom },
+  } as unknown as ExtensionContext;
+  const correctionRequest: ResponseRequest = {
+    purpose: "correction",
+    requiresConfidence: true,
+    answer: "correction",
+  };
+
+  await expect(collectResponse(rpcContext, correctionRequest)).resolves.toEqual(
+    {
+      kind: "submitted",
+      answer: "correction",
+    },
+  );
+  await expect(collectResponse(tuiContext, correctionRequest)).resolves.toEqual(
+    {
+      kind: "submitted",
+      answer: "correction",
+    },
+  );
+  expect(rpcUi.input).not.toHaveBeenCalled();
+  expect(tuiCustom).toHaveBeenCalledTimes(1);
+});
+
+test("starts supplied TUI confidence unconfirmed at 50", async () => {
+  const values: number[] = [];
+  let initialRender = "";
+  let customCalls = 0;
+  const tuiContext = {
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      custom: vi.fn(
+        async (factory) =>
+          new Promise((resolve) => {
+            customCalls += 1;
+            const component = factory(
+              { requestRender: vi.fn(), terminal: { rows: 40 } },
+              {
+                fg: (_color: string, text: string) => text,
+                borderColor: (text: string) => text,
+              },
+              {},
+              resolve,
+            );
+            if (customCalls === 1) {
+              component.handleInput("\r");
+              return;
+            }
+
+            const panel = component as ReturnType<typeof createConfidencePanel>;
+            initialRender = panel.render(80).join("\n");
+            values.push(panel.value());
+            panel.handleInput("\x1b[D");
+            values.push(panel.value());
+            panel.handleInput("\r");
+          }),
+      ),
+    },
+  } as unknown as ExtensionContext;
 
   await expect(
-    collectResponse(rpcContext, {
-      purpose: "correction",
-      requiresConfidence: false,
+    collectResponse(tuiContext, {
+      purpose: "graded",
+      requiresConfidence: true,
+      answer: "answer",
+      confidence: 75,
     }),
-  ).resolves.toEqual({ kind: "submitted", answer: "correction" });
-  expect(rpcUi.input).not.toHaveBeenCalled();
+  ).resolves.toEqual({ kind: "submitted", answer: "answer", confidence: 45 });
+  expect(values).toEqual([50, 45]);
+  expect(initialRender).toContain(
+    "Confidence: 50 / 100 (adjust or type to confirm)",
+  );
 });
 
 test("returns cancelled without UI", async () => {

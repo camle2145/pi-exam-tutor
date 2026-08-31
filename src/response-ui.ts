@@ -56,7 +56,7 @@ export async function collectResponse(
   if (typeof answerResult !== "string") {
     return answerResult ?? { kind: "cancelled" };
   }
-  if (!request.requiresConfidence) {
+  if (!shouldCollectConfidence(request)) {
     return { kind: "submitted", answer: answerResult };
   }
 
@@ -80,7 +80,7 @@ async function collectRpcResponse(
 ): Promise<ResponseResult> {
   const answer = await ctx.ui.editor("Your answer", request.answer);
   if (answer === undefined) return { kind: "cancelled" };
-  if (!request.requiresConfidence) return { kind: "submitted", answer };
+  if (!shouldCollectConfidence(request)) return { kind: "submitted", answer };
 
   const enteredConfidence = await ctx.ui.input("Confidence (0–100)");
   if (enteredConfidence === undefined) {
@@ -175,7 +175,7 @@ export class ConfidencePanel implements Component {
   private completed: ResponseResult | undefined;
 
   constructor(private readonly options: ConfidencePanelOptions) {
-    this.confidence = options.confidence ?? 50;
+    this.confidence = 50;
   }
 
   value(): number {
@@ -314,6 +314,11 @@ function editorTheme(theme: Theme): EditorTheme {
     borderColor: (text: string) => theme.fg("border", text),
     selectList: {} as EditorTheme["selectList"],
   };
+}
+
+/** Corrections are not gradeable, so they never collect confidence. */
+function shouldCollectConfidence(request: ResponseRequest): boolean {
+  return request.purpose !== "correction" && request.requiresConfidence;
 }
 
 function parseConfidence(value: string): number | undefined {
