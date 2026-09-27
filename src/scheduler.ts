@@ -11,11 +11,17 @@ import type {
   FsrsTrack,
   FsrsTrackName,
 } from "./domain.js";
+import { isAnsweredAttempt } from "./domain.js";
 
 export interface Scheduler {
   apply(
     track: FsrsTrack | undefined,
     correctness: Correctness,
+    now: Date,
+  ): FsrsTrack | undefined;
+  applyAttempt(
+    track: FsrsTrack | undefined,
+    attempt: Attempt,
     now: Date,
   ): FsrsTrack | undefined;
   dueAt(track: FsrsTrack | undefined): Date | undefined;
@@ -49,6 +55,16 @@ export const scheduler: Scheduler = {
     };
   },
 
+  applyAttempt(track, attempt, now) {
+    return this.apply(
+      track,
+      isAnsweredAttempt(attempt)
+        ? (attempt.correctness ?? "ungradable")
+        : "incorrect",
+      now,
+    );
+  },
+
   dueAt(track) {
     if (track === undefined) {
       return undefined;
@@ -69,6 +85,10 @@ export const scheduler: Scheduler = {
 };
 
 export function trackForAttempt(attempt: Attempt): FsrsTrackName | undefined {
+  if (!isAnsweredAttempt(attempt)) {
+    return "unassisted";
+  }
+
   if (
     attempt.correctness === undefined ||
     attempt.correctness === "ungradable"

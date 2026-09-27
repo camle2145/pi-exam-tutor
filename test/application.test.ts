@@ -16,10 +16,12 @@ async function createApp(): Promise<{
   course: Course;
   store: LocalStore;
   question: Question;
+  clock: FakeClock;
 }> {
   const ids = new SequenceIds();
   const store = new LocalStore(await tempRoot(), ids);
-  const app = new TutorApplicationService(store, new FakeClock(now), ids);
+  const clock = new FakeClock(now);
+  const app = new TutorApplicationService(store, clock, ids);
   const created = await app.createCourse("Physics");
   const course = await store.saveCourse(
     {
@@ -51,7 +53,7 @@ async function createApp(): Promise<{
     ],
   };
 
-  return { app, course, store, question };
+  return { app, course, store, question, clock };
 }
 
 test("assisted correctness cannot create unassisted mastery evidence", async () => {
@@ -72,6 +74,21 @@ test("assisted correctness cannot create unassisted mastery evidence", async () 
   const progress = (await store.getHistory(course.id)).concepts.kinematics!;
   expect(progress.unassisted).toBeUndefined();
   expect(progress.assisted?.reviewHistory).toHaveLength(1);
+});
+
+test("persists answered primary submissions with confidence", async () => {
+  const { app, course, store, question } = await createApp();
+  await app.acceptSubmission(
+    await app.recordQuestion(
+      await app.requestMode(course.id, "study"),
+      question,
+    ),
+    { answer: "velocity increases", confidence: 70 },
+  );
+
+  expect((await store.getHistory(course.id)).attempts).toMatchObject([
+    { kind: "answered", confidence: 70 },
+  ]);
 });
 
 test("records a branch retry instead of overwriting the original attempt", async () => {
@@ -143,6 +160,27 @@ test("restores a valid exam-generating activity snapshot", async () => {
   expect(app.restoreActivity(app.serializeActivity(activity))).toEqual(
     activity,
   );
+});
+
+test("restores an active exam independently of learning-history schema migration", async () => {
+  const { app, course } = await createApp();
+  const activeExam = {
+    schemaVersion: 1 as const,
+    state: {
+      tag: "exam-active" as const,
+      courseId: course.id,
+      exam: {
+        id: "exam-1",
+        operationId: "op-exam",
+        startedAt: now.toISOString(),
+        status: "active" as const,
+        items: [],
+        drafts: {},
+      },
+    },
+  };
+
+  expect(() => app.restoreActivity(JSON.stringify(activeExam))).not.toThrow();
 });
 
 test("rejects adversarial activity snapshots before restoring them", async () => {
@@ -277,7 +315,7 @@ test("projects unaided evidence, calibration, due tracks, and unresolved misconc
 test("excludes ungradable attempts from calibration and unaided evidence", async () => {
   const { course, question } = await createApp();
   const history = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     courseId: course.id,
     revision: 0,
     appliedOperationIds: [],
@@ -286,6 +324,7 @@ test("excludes ungradable attempts from calibration and unaided evidence", async
       {
         id: "attempt-1",
         operationId: "operation-1",
+        kind: "answered" as const,
         question,
         mode: "study" as const,
         submittedAt: now.toISOString(),
@@ -299,6 +338,7 @@ test("excludes ungradable attempts from calibration and unaided evidence", async
       {
         id: "attempt-2",
         operationId: "operation-2",
+        kind: "answered" as const,
         question,
         mode: "study" as const,
         submittedAt: now.toISOString(),
@@ -327,6 +367,63 @@ test("excludes ungradable attempts from calibration and unaided evidence", async
     meanConfidence: 100,
     fullyCorrectRate: 1,
   });
+});
+
+test("excludes unanswered exam items from confidence calibration", async () => {
+  const { course, question } = await createApp();
+  const answeredAttempt = {
+    id: "attempt-answered",
+    operationId: "operation-answered",
+    kind: "answered" as const,
+    question,
+    mode: "study" as const,
+    submittedAt: now.toISOString(),
+    answer: "answer",
+    confidence: 70,
+    unaidedAtSubmission: true,
+    highestHintLevel: 0 as const,
+    revealed: false,
+    correctness: "correct" as const,
+  };
+  const unansweredAttempt = {
+    id: "attempt-unanswered",
+    operationId: "operation-unanswered",
+    kind: "unanswered" as const,
+    question: { ...question, id: "exam-question", kind: "exam" as const },
+    mode: "exam" as const,
+    submittedAt: now.toISOString(),
+    unaidedAtSubmission: true,
+    highestHintLevel: 0 as const,
+    revealed: false,
+    omissionReason: "manual-partial" as const,
+  };
+
+  const dashboard = buildDashboard(
+    course,
+    {
+      schemaVersion: 2,
+      courseId: course.id,
+      revision: 0,
+      appliedOperationIds: [],
+      concepts: {},
+      attempts: [answeredAttempt, unansweredAttempt],
+    },
+    now,
+  );
+
+  expect(
+    dashboard.confidenceCalibration.reduce(
+      (count, bin) => count + bin.attempts,
+      0,
+    ),
+  ).toBe(1);
+  expect(dashboard.unansweredExamItems).toEqual([
+    {
+      questionId: unansweredAttempt.question.id,
+      conceptId: unansweredAttempt.question.targetConceptId,
+      omissionReason: "manual-partial",
+    },
+  ]);
 });
 
 test("selects an existing course as an idle activity", async () => {
@@ -378,6 +475,82 @@ test("rejects a concept proposal whose source is not configured", async () => {
       },
     ]),
   ).rejects.toThrow("Unknown source material: missing");
+});
+
+test("records each manually omitted exam item before model grading", async () => {
+  const { app, course, store } = await createApp();
+  const submitted = await app.submitExam(
+    await activeExamWithDrafts(app, course.id, ["one"]),
+  );
+  const attempts = (await store.getHistory(course.id)).attempts;
+
+  expect(submitted.state).toMatchObject({ tag: "exam-submitted" });
+  expect(attempts).toContainEqual(
+    expect.objectContaining({
+      kind: "unanswered",
+      question: expect.objectContaining({ id: "two" }),
+      omissionReason: "manual-partial",
+    }),
+  );
+});
+
+test("applies only one Again review per concept for multiple omitted items", async () => {
+  const { app, course, store } = await createApp();
+  await app.submitExam(await activeExamWithDrafts(app, course.id, []));
+
+  const track = (await store.getHistory(course.id)).concepts.kinematics!
+    .unassisted!;
+  expect(track.reviewHistory).toHaveLength(1);
+  expect(track.reviewHistory[0]).toMatchObject({ rating: "Again" });
+});
+
+test("grades only drafts after omissions are recorded", async () => {
+  const { app, course, store } = await createApp();
+  const submitted = await app.submitExam(
+    await activeExamWithDrafts(app, course.id, ["one"]),
+  );
+  await app.recordExamGrades(submitted, [
+    {
+      questionId: "one",
+      correctness: "correct",
+      gradingRationale: "Complete",
+    },
+  ]);
+
+  expect((await store.getHistory(course.id)).attempts).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "unanswered",
+        question: expect.objectContaining({ id: "two" }),
+      }),
+      expect.objectContaining({
+        kind: "answered",
+        question: expect.objectContaining({ id: "one" }),
+      }),
+    ]),
+  );
+});
+
+test("labels deadline omissions and still grades saved drafts later", async () => {
+  const { app, clock, course, store } = await createApp();
+  const timed = await activeExamWithDrafts(app, course.id, ["one"], {
+    deadlineAt: "2026-08-27T10:00:00.000Z",
+  });
+  clock.set(new Date("2026-08-27T10:01:00.000Z"));
+  const submitted = await app.submitExam(timed);
+
+  expect((await store.getHistory(course.id)).attempts).toContainEqual(
+    expect.objectContaining({ omissionReason: "deadline" }),
+  );
+  await expect(
+    app.recordExamGrades(submitted, [
+      {
+        questionId: "one",
+        correctness: "correct",
+        gradingRationale: "Complete",
+      },
+    ]),
+  ).resolves.toMatchObject({ state: { exam: { status: "graded" } } });
 });
 
 test("records a complete submitted exam as independently scheduled evidence", async () => {
@@ -741,6 +914,48 @@ test("rejects multi-node concept parent cycles", async () => {
     }),
   ).toThrow("Concept parent cycle");
 });
+
+async function activeExamWithDrafts(
+  app: TutorApplicationService,
+  courseId: string,
+  draftIds: readonly string[],
+  options: { deadlineAt?: string } = {},
+) {
+  const items = ["one", "two"].map((id) => ({
+    id,
+    kind: "exam" as const,
+    targetConceptId: "kinematics",
+    prompt: `Explain ${id}.`,
+    sourceRefs: [
+      {
+        materialId: "material-1",
+        path: "/courses/physics/notes.md",
+        locator: `# ${id}`,
+      },
+    ],
+  }));
+  const mode = await app.requestMode(courseId, "exam", options);
+  return app.recordExam(mode, {
+    id: "exam-omissions",
+    operationId: "exam-operation-omissions",
+    startedAt: now.toISOString(),
+    ...(options.deadlineAt === undefined
+      ? {}
+      : { deadlineAt: options.deadlineAt }),
+    status: "active",
+    items,
+    drafts: Object.fromEntries(
+      draftIds.map((id) => [
+        id,
+        {
+          answer: `Answer ${id}.`,
+          confidence: 80,
+          submittedAt: now.toISOString(),
+        },
+      ]),
+    ),
+  });
+}
 
 function questionSource(course: Course) {
   return {

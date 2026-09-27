@@ -1,4 +1,5 @@
 import type {
+  AnsweredAttempt,
   Attempt,
   CalibrationBin,
   Course,
@@ -7,6 +8,7 @@ import type {
   LearningHistory,
   UnaidedEvidence,
 } from "./domain.js";
+import { isAnsweredAttempt } from "./domain.js";
 import { scheduler } from "./scheduler.js";
 
 const calibrationRanges = [
@@ -28,7 +30,9 @@ export function buildDashboard(
   const gradeableAttempts = history.attempts.filter(isGradeable);
   const unaidedCorrectRetrievalCount = history.attempts.filter(
     (attempt) =>
-      attempt.unaidedAtSubmission && attempt.correctness === "correct",
+      isAnsweredAttempt(attempt) &&
+      attempt.unaidedAtSubmission &&
+      attempt.correctness === "correct",
   ).length;
 
   return {
@@ -60,6 +64,17 @@ export function buildDashboard(
           .filter((misconception) => misconception.resolvedAt === undefined)
           .map(({ text }) => ({ conceptId, text })),
     ),
+    unansweredExamItems: history.attempts.flatMap((attempt) =>
+      attempt.kind === "unanswered" && attempt.mode === "exam"
+        ? [
+            {
+              questionId: attempt.question.id,
+              conceptId: attempt.question.targetConceptId,
+              omissionReason: attempt.omissionReason,
+            },
+          ]
+        : [],
+    ),
   };
 }
 
@@ -76,17 +91,22 @@ function dueConcepts(
     .map(([conceptId]) => conceptId);
 }
 
-function isGradeable(attempt: Attempt): boolean {
+type GradeableAttempt = AnsweredAttempt & { confidence: number };
+
+function isGradeable(attempt: Attempt): attempt is GradeableAttempt {
   return (
-    attempt.correctness !== undefined && attempt.correctness !== "ungradable"
+    isAnsweredAttempt(attempt) &&
+    attempt.confidence !== undefined &&
+    attempt.correctness !== undefined &&
+    attempt.correctness !== "ungradable"
   );
 }
 
-function correctnessPercent(attempt: Attempt): number {
+function correctnessPercent(attempt: GradeableAttempt): number {
   return attempt.correctness === "correct" ? 100 : 0;
 }
 
-function calibration(attempts: readonly Attempt[]): CalibrationBin[] {
+function calibration(attempts: readonly GradeableAttempt[]): CalibrationBin[] {
   return calibrationRanges.map(({ range, min, max }) => {
     const inRange = attempts.filter(
       (attempt) => attempt.confidence >= min && attempt.confidence <= max,
