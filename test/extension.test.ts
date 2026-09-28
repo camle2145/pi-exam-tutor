@@ -253,6 +253,7 @@ function createFakePi(
     notify: vi.fn(),
     setStatus: vi.fn(),
     setWidget: vi.fn(),
+    setEditorText: vi.fn(),
     select: vi.fn(),
     input: vi.fn(),
     custom: vi.fn(async () => undefined),
@@ -319,6 +320,11 @@ function createFakePi(
         },
         context,
       );
+    },
+    async agentSettled() {
+      for (const handler of handlers.get("agent_settled") ?? []) {
+        await handler({ type: "agent_settled" }, context);
+      }
     },
     async invokeCommand(name: string, args = "") {
       return commands.get(name)?.handler(args, context);
@@ -565,8 +571,17 @@ test("registers every required tutor command and canonical tool", () => {
       "hint",
       "reveal",
       "course",
+      "resume-answer",
       "study-off",
     ]),
+  );
+  expect(fake.api.registerMessageRenderer).toHaveBeenCalledWith(
+    "pi-exam-tutor/learner-response-v1",
+    expect.any(Function),
+  );
+  expect(fake.api.registerMessageRenderer).toHaveBeenCalledWith(
+    "pi-exam-tutor/exam-item-v1",
+    expect.any(Function),
   );
   expect(fake.toolNames()).toEqual(
     expect.arrayContaining([
@@ -692,29 +707,135 @@ test("does not inject tutor policy while activity is idle", async () => {
   expect(await fake.beforeAgentStart()).toBeUndefined();
 });
 
-test("stores a regular answer before transforming it for grading", async () => {
+test("opens one response panel after the tutor turn settles", async () => {
+  const fake = createFakePi({ activity: awaitingAnswer });
+  extension(fake.api, createDependencies());
+  await fake.startSession();
+
+  await fake.agentSettled();
+  await fake.agentSettled();
+
+  expect(fake.ui.custom).toHaveBeenCalledTimes(1);
+});
+
+test("persists and sends a confirmed answer as a custom learner message", async () => {
   const acceptSubmission = vi.fn(async () => awaitingGrade);
   const dependencies = createDependencies({ acceptSubmission });
   const fake = createFakePi({ activity: awaitingAnswer });
+  fake.ui.custom.mockResolvedValueOnce({
+    kind: "submitted",
+    answer: "Velocity changes.",
+    confidence: 70,
+  });
   extension(fake.api, dependencies);
   await fake.startSession();
 
-  const result = await fake.dispatchInput(
-    "[confidence: 70]\nVelocity changes over time.",
-  );
+  await fake.agentSettled();
 
-  expect(acceptSubmission).toHaveBeenCalledTimes(1);
   expect(acceptSubmission).toHaveBeenCalledWith(awaitingAnswer, {
+    answer: "Velocity changes.",
     confidence: 70,
-    answer: "Velocity changes over time.",
   });
-  expect(fake.appendedEntries.at(-1)).toEqual({
-    customType: "pi-exam-tutor/activity-v1",
-    data: awaitingGrade,
+  expect(fake.sentMessages).toContainEqual(
+    expect.objectContaining({
+      message: expect.objectContaining({
+        customType: "pi-exam-tutor/learner-response-v1",
+        content: expect.stringContaining("<exam-tutor-learner-submission>"),
+        display: true,
+      }),
+      options: { triggerTurn: true },
+    }),
+  );
+});
+
+test("defers without persistence and restores ordinary typed text", async () => {
+  const fake = createFakePi({ activity: awaitingAnswer });
+  fake.ui.custom.mockResolvedValueOnce({
+    kind: "deferred",
+    draft: { answer: "x" },
   });
-  expect(result).toMatchObject({
+  const dependencies = createDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.agentSettled();
+
+  await expect(fake.dispatchInput("do not lose this")).resolves.toEqual({
+    action: "handled",
+  });
+  expect(dependencies.app.acceptSubmission).not.toHaveBeenCalled();
+  expect(fake.ui.setEditorText).toHaveBeenCalledWith("do not lose this");
+  expect(fake.ui.notify).toHaveBeenCalledWith(
+    expect.stringContaining("/resume-answer"),
+    "info",
+  );
+});
+
+test("resumes the matching deferred response with its draft", async () => {
+  const acceptSubmission = vi.fn(async () => awaitingGrade);
+  const fake = createFakePi({ activity: awaitingAnswer });
+  fake.ui.custom
+    .mockResolvedValueOnce({ kind: "deferred", draft: { answer: "draft" } })
+    .mockResolvedValueOnce({
+      kind: "submitted",
+      answer: "draft",
+      confidence: 60,
+    });
+  extension(fake.api, createDependencies({ acceptSubmission }));
+  await fake.startSession();
+  await fake.agentSettled();
+
+  await fake.invokeCommand("resume-answer");
+
+  expect(acceptSubmission).toHaveBeenCalledWith(awaitingAnswer, {
+    answer: "draft",
+    confidence: 60,
+  });
+});
+
+test("retains header parsing for regular answers without a UI", async () => {
+  const acceptSubmission = vi.fn(async () => awaitingGrade);
+  const fake = createFakePi({ activity: awaitingAnswer, mode: "print" });
+  extension(fake.api, createDependencies({ acceptSubmission }));
+  await fake.startSession();
+
+  await expect(
+    fake.dispatchInput("[confidence: 70]\nVelocity changes over time."),
+  ).resolves.toMatchObject({
     action: "transform",
     text: expect.stringContaining("<exam-tutor-learner-submission>"),
+  });
+  expect(acceptSubmission).toHaveBeenCalledWith(awaitingAnswer, {
+    answer: "Velocity changes over time.",
+    confidence: 70,
+  });
+});
+
+test("collects a correction without confidence", async () => {
+  const correction = {
+    ...awaitingAnswer,
+    state: {
+      tag: "awaiting-correction" as const,
+      courseId: course.id,
+      mode: "study" as const,
+      attemptId: "attempt-1",
+      question,
+      hintLevel: 0 as const,
+    },
+  } satisfies SessionActivity;
+  const acceptSubmission = vi.fn(async () => awaitingGrade);
+  const fake = createFakePi({ activity: correction });
+  fake.ui.custom.mockResolvedValueOnce({
+    kind: "submitted",
+    answer: "Corrected answer.",
+  });
+  extension(fake.api, createDependencies({ acceptSubmission }));
+  await fake.startSession();
+
+  await fake.agentSettled();
+
+  expect(acceptSubmission).toHaveBeenCalledWith(correction, {
+    answer: "Corrected answer.",
   });
 });
 

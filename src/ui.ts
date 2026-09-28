@@ -34,6 +34,17 @@ export function updateTutorStatus(
   ]);
 }
 
+/** Shows the resume affordance only while an unpersisted response is deferred. */
+export function setDeferredResponseWidget(
+  ctx: ExtensionContext,
+  deferred: boolean,
+): void {
+  if (!ctx.hasUI || !deferred) return;
+  ctx.ui.setWidget(UI_KEY, [
+    ctx.ui.theme.fg("dim", "Response deferred · /resume-answer"),
+  ]);
+}
+
 export async function showDashboard(
   pi: ExtensionAPI,
   ctx: ExtensionContext,

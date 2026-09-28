@@ -91,6 +91,30 @@ test("persists answered primary submissions with confidence", async () => {
   ]);
 });
 
+test("persists correction submissions without confidence or calibration readiness", async () => {
+  const { app, course, store, question } = await createApp();
+  const submitted = await app.acceptSubmission(
+    await app.recordQuestion(
+      await app.requestMode(course.id, "study"),
+      question,
+    ),
+    { answer: "initial answer", confidence: 70 },
+  );
+  const correction = await app.recordGrade(submitted, {
+    correctness: "incorrect",
+    gradingRationale: "Incorrect.",
+  });
+
+  await app.acceptSubmission(correction, { answer: "corrected answer" });
+
+  const attempts = (await store.getHistory(course.id)).attempts;
+  expect(attempts.at(-1)).toMatchObject({
+    kind: "answered",
+    answer: "corrected answer",
+  });
+  expect(attempts.at(-1)).not.toHaveProperty("confidence");
+});
+
 test("records a branch retry instead of overwriting the original attempt", async () => {
   const { app, course, store, question } = await createApp();
   const activity = await app.recordQuestion(

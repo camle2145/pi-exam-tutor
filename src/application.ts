@@ -32,6 +32,10 @@ export interface Grade {
   misconception?: string;
 }
 
+type RegularSubmission = Omit<Submission, "confidence"> & {
+  confidence?: number;
+};
+
 /** Application boundary for durable learning evidence and pure protocol transitions. */
 export interface TutorApplication {
   createCourse(name: string): Promise<Course>;
@@ -51,7 +55,7 @@ export interface TutorApplication {
   ): Promise<SessionActivity>;
   acceptSubmission(
     activity: SessionActivity,
-    submission: Submission,
+    submission: RegularSubmission,
   ): Promise<SessionActivity>;
   requestHint(activity: SessionActivity): Promise<SessionActivity>;
   recordHint(
@@ -176,11 +180,11 @@ export class TutorApplicationService implements TutorApplication {
 
   async acceptSubmission(
     current: SessionActivity,
-    submission: Submission,
+    submission: RegularSubmission,
   ): Promise<SessionActivity> {
-    assertSubmission(submission);
     const course = await this.courseFor(current);
     const details = submissionDetails(current.state);
+    assertSubmission(submission, details.requiresConfidence);
     assertQuestion(course, details.question);
 
     const attemptId = this.ids.next("attempt");
@@ -916,6 +920,7 @@ function submissionDetails(state: ActivityState): {
   mode: Exclude<TutorMode, "exam">;
   hintLevel: HintLevel;
   revealed: boolean;
+  requiresConfidence: boolean;
 } {
   if (state.tag === "awaiting-primary-answer") {
     return {
@@ -923,6 +928,7 @@ function submissionDetails(state: ActivityState): {
       mode: state.mode,
       hintLevel: state.hintLevel,
       revealed: state.revealed,
+      requiresConfidence: true,
     };
   }
   if (state.tag === "awaiting-correction") {
@@ -931,6 +937,7 @@ function submissionDetails(state: ActivityState): {
       mode: state.mode,
       hintLevel: state.hintLevel,
       revealed: false,
+      requiresConfidence: false,
     };
   }
   throw new Error("A submission is not currently requested");
@@ -977,12 +984,21 @@ function transitionForGrade(
   });
 }
 
-function assertSubmission(submission: Submission): void {
+function assertSubmission(
+  submission: RegularSubmission,
+  requiresConfidence: boolean,
+): void {
   if (
     typeof submission.answer !== "string" ||
     submission.answer.trim() === ""
   ) {
     throw new Error("Answer must not be empty");
+  }
+  if (submission.confidence === undefined) {
+    if (requiresConfidence) {
+      throw new Error("Confidence must be between 0 and 100");
+    }
+    return;
   }
   if (
     typeof submission.confidence !== "number" ||

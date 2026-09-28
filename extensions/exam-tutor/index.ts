@@ -30,10 +30,15 @@ import type {
 } from "../../src/domain.js";
 import { parseAnswer, parseExamDraft } from "../../src/input.js";
 import { buildTutorPrompt } from "../../src/prompt.js";
+import {
+  collectResponse,
+  type ResponsePurpose,
+} from "../../src/response-ui.js";
 import { LocalStore, type Store } from "../../src/storage.js";
 import { transition } from "../../src/state-machine.js";
 import {
   conceptProposalText,
+  setDeferredResponseWidget,
   showConceptProposals,
   showDashboard,
   updateTutorStatus,
@@ -85,6 +90,24 @@ type ToolDisplayDetails = {
   display: string;
 };
 
+type PendingResponse = {
+  purpose: ResponsePurpose;
+  activityFingerprint: string;
+  draft: { answer: string; confidence?: number };
+};
+
+type ResponseControllerState = {
+  panelOpen: boolean;
+  deferred?: PendingResponse;
+  openedFingerprint?: string;
+};
+
+type LearnerResponseDetails = {
+  answer: string;
+  confidence?: number;
+  mode: Exclude<TutorMode, "exam">;
+};
+
 export default function examTutorExtension(
   pi: ExtensionAPI,
   suppliedDependencies?: ExamTutorAdapterDependencies,
@@ -94,6 +117,7 @@ export default function examTutorExtension(
   const dashboardBuilder = dependencies.buildDashboard ?? projectDashboard;
   let activity: SessionActivity = idleActivity();
   let deadlineTimer: NodeJS.Timeout | undefined;
+  let responseController: ResponseControllerState = { panelOpen: false };
 
   const triggerTurn = (instruction: string): void => {
     pi.sendMessage(
@@ -151,9 +175,111 @@ export default function examTutorExtension(
 
   const persist = (next: SessionActivity, ctx: ExtensionContext): void => {
     activity = next;
+    responseController.deferred = undefined;
+    responseController.openedFingerprint = undefined;
     pi.appendEntry(ACTIVITY_ENTRY_TYPE, next);
     updateTutorStatus(ctx, next);
     scheduleDeadline(next, ctx);
+  };
+
+  const collectPendingResponse = async (
+    ctx: ExtensionContext,
+    draft?: PendingResponse["draft"],
+  ): Promise<void> => {
+    const details = responseDetails(activity);
+    if (details === undefined) return;
+    const fingerprint = activityFingerprint(activity);
+    if (
+      responseController.panelOpen ||
+      responseController.deferred !== undefined ||
+      responseController.openedFingerprint === fingerprint
+    ) {
+      return;
+    }
+
+    responseController.panelOpen = true;
+    responseController.openedFingerprint = fingerprint;
+    try {
+      const result = await collectResponse(ctx, {
+        purpose: details.purpose,
+        requiresConfidence: details.requiresConfidence,
+        ...(draft === undefined
+          ? {}
+          : { answer: draft.answer, confidence: draft.confidence }),
+      });
+      if (result.kind === "deferred") {
+        responseController.deferred = {
+          purpose: details.purpose,
+          activityFingerprint: fingerprint,
+          draft: result.draft,
+        };
+        updateTutorStatus(ctx, activity);
+        setDeferredResponseWidget(ctx, true);
+        return;
+      }
+      if (result.kind === "cancelled") return;
+
+      if (details.purpose === "explanation") {
+        const next = await app.recordExplanation(activity, result.answer);
+        persist(next, ctx);
+        pi.sendMessage(
+          {
+            customType: "pi-exam-tutor/learner-response-v1",
+            content: learnerExplanation(result.answer),
+            display: true,
+            details: { answer: result.answer, mode: details.mode },
+          },
+          { triggerTurn: true },
+        );
+        return;
+      }
+
+      const submission =
+        result.confidence === undefined
+          ? { answer: result.answer }
+          : { answer: result.answer, confidence: result.confidence };
+      const next = await app.acceptSubmission(activity, submission);
+      persist(next, ctx);
+      pi.sendMessage(
+        {
+          customType: "pi-exam-tutor/learner-response-v1",
+          content: learnerSubmission(result.answer, result.confidence),
+          display: true,
+          details: {
+            answer: result.answer,
+            ...(result.confidence === undefined
+              ? {}
+              : { confidence: result.confidence }),
+            mode: details.mode,
+          },
+        },
+        { triggerTurn: true },
+      );
+    } catch (error) {
+      responseController.openedFingerprint = undefined;
+      notifyError(
+        ctx,
+        error instanceof Error ? error.message : "Response could not be saved",
+      );
+    } finally {
+      responseController.panelOpen = false;
+    }
+  };
+
+  const resumeAnswer = async (ctx: ExtensionContext): Promise<void> => {
+    const pending = responseController.deferred;
+    if (
+      pending === undefined ||
+      responseDetails(activity)?.purpose !== pending.purpose ||
+      activityFingerprint(activity) !== pending.activityFingerprint
+    ) {
+      if (ctx.hasUI) ctx.ui.notify("No response is pending", "info");
+      return;
+    }
+    responseController.deferred = undefined;
+    responseController.openedFingerprint = undefined;
+    updateTutorStatus(ctx, activity);
+    await collectPendingResponse(ctx, pending.draft);
   };
 
   const selectedCourseId = (): string => {
@@ -167,6 +293,7 @@ export default function examTutorExtension(
   };
 
   pi.on("session_start", async (_event, ctx) => {
+    responseController = { panelOpen: false };
     let latestData: unknown;
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type === "custom" && entry.customType === ACTIVITY_ENTRY_TYPE) {
@@ -184,10 +311,26 @@ export default function examTutorExtension(
   pi.on("session_shutdown", () => {
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
     deadlineTimer = undefined;
+    responseController = { panelOpen: false };
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    await collectPendingResponse(ctx);
   });
 
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension") return { action: "continue" };
+
+    if (responseController.deferred !== undefined) {
+      if (ctx.hasUI) {
+        ctx.ui.setEditorText(event.text);
+        ctx.ui.notify(
+          "Response deferred · run /resume-answer to continue",
+          "info",
+        );
+      }
+      return { action: "handled" };
+    }
 
     if (activity.state.tag === "exam-active") {
       const parsed = parseExamDraft(
@@ -225,34 +368,48 @@ export default function examTutorExtension(
       return { action: "handled" };
     }
 
-    if (
-      activity.state.tag === "awaiting-primary-answer" ||
-      activity.state.tag === "awaiting-correction"
-    ) {
-      const parsed = parseAnswer(event.text);
-      if ("message" in parsed) {
-        notifyError(ctx, parsed.message);
-        return { action: "handled" };
+    if (!ctx.hasUI) {
+      if (activity.state.tag === "awaiting-primary-answer") {
+        const parsed = parseAnswer(event.text);
+        if ("message" in parsed) {
+          notifyError(ctx, parsed.message);
+          return { action: "handled" };
+        }
+        const next = await app.acceptSubmission(activity, parsed);
+        persist(next, ctx);
+        return {
+          action: "transform",
+          text: learnerSubmission(parsed.answer, parsed.confidence),
+          ...(event.images === undefined ? {} : { images: event.images }),
+        };
       }
-      const next = await app.acceptSubmission(activity, parsed);
-      persist(next, ctx);
-      return {
-        action: "transform",
-        text: learnerSubmission(parsed.answer, parsed.confidence),
-        ...(event.images === undefined ? {} : { images: event.images }),
-      };
-    }
 
-    if (activity.state.tag === "awaiting-explanation") {
-      if (event.text.trim() === "") {
-        notifyError(ctx, "Explanation must not be empty");
-        return { action: "handled" };
+      if (activity.state.tag === "awaiting-correction") {
+        const answer = event.text.trim();
+        if (answer === "") {
+          notifyError(ctx, "Answer must not be empty");
+          return { action: "handled" };
+        }
+        const next = await app.acceptSubmission(activity, { answer });
+        persist(next, ctx);
+        return {
+          action: "transform",
+          text: learnerSubmission(answer),
+          ...(event.images === undefined ? {} : { images: event.images }),
+        };
       }
-      return {
-        action: "transform",
-        text: learnerExplanation(event.text.trim()),
-        ...(event.images === undefined ? {} : { images: event.images }),
-      };
+
+      if (activity.state.tag === "awaiting-explanation") {
+        if (event.text.trim() === "") {
+          notifyError(ctx, "Explanation must not be empty");
+          return { action: "handled" };
+        }
+        return {
+          action: "transform",
+          text: learnerExplanation(event.text.trim()),
+          ...(event.images === undefined ? {} : { images: event.images }),
+        };
+      }
     }
 
     return { action: "continue" };
@@ -274,9 +431,94 @@ export default function examTutorExtension(
     persist,
     selectedCourseId,
     triggerTurn,
+    resumeAnswer,
     dashboardBuilder,
   });
+  registerMessageRenderers(pi);
   registerTools(pi, app, () => activity, persist);
+}
+
+function responseDetails(current: SessionActivity):
+  | {
+      purpose: ResponsePurpose;
+      requiresConfidence: boolean;
+      mode: Exclude<TutorMode, "exam">;
+    }
+  | undefined {
+  switch (current.state.tag) {
+    case "awaiting-primary-answer":
+      return {
+        purpose: "graded",
+        requiresConfidence: true,
+        mode: current.state.mode,
+      };
+    case "awaiting-correction":
+      return {
+        purpose: "correction",
+        requiresConfidence: false,
+        mode: current.state.mode,
+      };
+    case "awaiting-explanation":
+      return {
+        purpose: "explanation",
+        requiresConfidence: false,
+        mode: current.state.mode,
+      };
+    default:
+      return undefined;
+  }
+}
+
+function activityFingerprint(current: SessionActivity): string {
+  const { state } = current;
+  if (
+    state.tag !== "awaiting-primary-answer" &&
+    state.tag !== "awaiting-correction" &&
+    state.tag !== "awaiting-explanation"
+  ) {
+    return "";
+  }
+  return [
+    state.tag,
+    state.question.id,
+    "attemptId" in state ? state.attemptId : "",
+    "hintLevel" in state ? state.hintLevel : "",
+  ].join(":");
+}
+
+function registerMessageRenderers(pi: ExtensionAPI): void {
+  pi.registerMessageRenderer<LearnerResponseDetails>(
+    "pi-exam-tutor/learner-response-v1",
+    (message, options, theme) => {
+      const details = message.details ?? { answer: "", mode: "study" };
+      const confidence =
+        details.confidence === undefined
+          ? ""
+          : ` · confidence ${details.confidence}`;
+      const display = options.expanded
+        ? [
+            `Your answer: ${details.answer}`,
+            ...(details.confidence === undefined
+              ? []
+              : [`Confidence: ${details.confidence}`]),
+            `Mode: ${details.mode}`,
+          ].join("\n")
+        : `Your answer${confidence}`;
+      return new Text(theme.fg("toolOutput", display), 0, 0);
+    },
+  );
+  pi.registerMessageRenderer<{ prompt?: string; progress?: string }>(
+    "pi-exam-tutor/exam-item-v1",
+    (message, _options, theme) => {
+      const details = message.details ?? {};
+      const content =
+        typeof message.content === "string" ? message.content : "Exam item";
+      const display = [details.progress, details.prompt ?? content]
+        .filter((line): line is string => line !== undefined)
+        .join("\n");
+      return new Text(theme.fg("toolOutput", display), 0, 0);
+    },
+  );
 }
 
 interface CommandRuntime {
@@ -287,6 +529,7 @@ interface CommandRuntime {
   persist(next: SessionActivity, ctx: ExtensionContext): void;
   selectedCourseId(): string;
   triggerTurn(instruction: string): void;
+  resumeAnswer(ctx: ExtensionContext): Promise<void>;
   dashboardBuilder: (
     course: Course,
     history: Awaited<ReturnType<Store["getHistory"]>>,
@@ -461,6 +704,10 @@ function registerCommands(pi: ExtensionAPI, runtime: CommandRuntime): void {
         runtime.dashboardBuilder(course, history, runtime.clock.now()),
       );
     },
+  });
+  pi.registerCommand("resume-answer", {
+    description: "Resume a deferred tutor response",
+    handler: async (_args, ctx) => runtime.resumeAnswer(ctx),
   });
   pi.registerCommand("study-off", {
     description: "Turn off tutor mode",
@@ -926,10 +1173,10 @@ function citation(sourceRef: SourceReference): string {
   return `${sourceRef.path} (${sourceRef.locator})`;
 }
 
-function learnerSubmission(answer: string, confidence: number): string {
+function learnerSubmission(answer: string, confidence?: number): string {
   return [
     "<exam-tutor-learner-submission>",
-    `confidence: ${confidence}`,
+    ...(confidence === undefined ? [] : [`confidence: ${confidence}`]),
     "answer:",
     answer,
     "</exam-tutor-learner-submission>",
