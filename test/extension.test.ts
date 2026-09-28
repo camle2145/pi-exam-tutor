@@ -644,44 +644,80 @@ test("saves an exam answer only after confidence and advances to the next item",
   ).toContain("second prompt");
 });
 
-test.each([
-  ["deferred", { kind: "deferred", draft: { answer: "later" } }],
-  ["cancelled", { kind: "cancelled" }],
-])(
-  "reopens an unanswered exam item after a %s response without duplicate panels",
-  async (_outcome, interruptedResponse) => {
-    const fake = createFakePi({ activity: activeExam });
-    fake.ui.custom
-      .mockResolvedValueOnce(interruptedResponse)
-      .mockResolvedValueOnce({
-        kind: "submitted",
-        answer: "Acceleration changes velocity.",
-        confidence: 80,
-      });
-    extension(fake.api, createDependencies());
-    await fake.startSession();
+test("resumes a deferred unanswered exam response with its adapter-memory draft", async () => {
+  const fake = createFakePi({ activity: activeExam });
+  fake.ui.custom
+    .mockResolvedValueOnce({ kind: "deferred", draft: { answer: "later" } })
+    .mockResolvedValueOnce({
+      kind: "submitted",
+      answer: "Acceleration changes velocity.",
+      confidence: 80,
+    });
+  extension(fake.api, createDependencies());
+  await fake.startSession();
 
-    await fake.agentSettled();
-    await fake.agentSettled();
-    await fake.agentSettled();
+  await fake.agentSettled();
+  await fake.agentSettled();
 
-    expect(fake.ui.custom).toHaveBeenCalledTimes(2);
-    expect(fake.appendedEntries.at(-1)).toMatchObject({
-      data: {
-        state: {
-          exam: {
-            drafts: {
-              "1": {
-                answer: "Acceleration changes velocity.",
-                confidence: 80,
-              },
+  expect(fake.ui.custom).toHaveBeenCalledTimes(2);
+  const resumedPanel = fake.ui.custom.mock.calls[1]?.[0](
+    { requestRender: vi.fn(), terminal: { rows: 40 } },
+    {
+      fg: (_color: string, text: string) => text,
+      borderColor: (text: string) => text,
+    },
+    {},
+    vi.fn(),
+  );
+  expect(resumedPanel.render(120).join("\n")).toContain("later");
+  expect(fake.appendedEntries.at(-1)).toMatchObject({
+    data: {
+      state: {
+        exam: {
+          drafts: {
+            "1": {
+              answer: "Acceleration changes velocity.",
+              confidence: 80,
             },
           },
         },
       },
+    },
+  });
+});
+
+test("reopens a cancelled unanswered exam item without duplicate panels", async () => {
+  const fake = createFakePi({ activity: activeExam });
+  fake.ui.custom
+    .mockResolvedValueOnce({ kind: "cancelled" })
+    .mockResolvedValueOnce({
+      kind: "submitted",
+      answer: "Acceleration changes velocity.",
+      confidence: 80,
     });
-  },
-);
+  extension(fake.api, createDependencies());
+  await fake.startSession();
+
+  await fake.agentSettled();
+  await fake.agentSettled();
+  await fake.agentSettled();
+
+  expect(fake.ui.custom).toHaveBeenCalledTimes(2);
+  expect(fake.appendedEntries.at(-1)).toMatchObject({
+    data: {
+      state: {
+        exam: {
+          drafts: {
+            "1": {
+              answer: "Acceleration changes velocity.",
+              confidence: 80,
+            },
+          },
+        },
+      },
+    },
+  });
+});
 
 test("does not overwrite a saved exam draft before reconfirmed confidence", async () => {
   const savedExam: SessionActivity = {
@@ -740,6 +776,18 @@ test("shows review before manually submitting a partial exam", async () => {
     expect.anything(),
   );
   expect(reviewText(fake)).toContain("Unanswered");
+});
+
+test("does not submit a partial exam manually without an interactive review", async () => {
+  const submitExam = vi.fn(async () => submittedExam);
+  const fake = createFakePi({ activity: activeExam, mode: "print" });
+  extension(fake.api, createDependencies({ submitExam }));
+  await fake.startSession();
+
+  await fake.invokeCommand("exam", "submit");
+
+  expect(submitExam).not.toHaveBeenCalled();
+  expect(fake.appendedEntries).toEqual([]);
 });
 
 test("exports a Pi extension factory", () => {

@@ -111,6 +111,11 @@ type LearnerResponseDetails = {
 
 interface ExamControllerState {
   activeQuestionId?: string;
+  deferredDraft?: {
+    questionId: string;
+    answer: string;
+    confidence?: number;
+  };
   pendingEdit?: {
     questionId: string;
     answer: string;
@@ -237,6 +242,9 @@ export default function examTutorExtension(
     }
     examController = {
       activeQuestionId,
+      ...(examController.deferredDraft === undefined
+        ? {}
+        : { deferredDraft: examController.deferredDraft }),
       ...(examController.pendingEdit === undefined
         ? {}
         : { pendingEdit: examController.pendingEdit }),
@@ -387,7 +395,11 @@ export default function examTutorExtension(
     if (edit === undefined && openedExamQuestionId === questionId) return;
 
     const persistedDraft = activity.state.exam.drafts[questionId];
-    const initial = edit ?? persistedDraft;
+    const deferredDraft =
+      examController.deferredDraft?.questionId === questionId
+        ? examController.deferredDraft
+        : undefined;
+    const initial = edit ?? deferredDraft ?? persistedDraft;
     examPanelOpen = true;
     openedExamQuestionId = questionId;
     try {
@@ -414,6 +426,10 @@ export default function examTutorExtension(
           };
           updateTutorStatus(ctx, activity);
         } else {
+          examController = {
+            ...examController,
+            deferredDraft: { questionId, ...result.draft },
+          };
           openedExamQuestionId = undefined;
         }
         return;
@@ -423,6 +439,7 @@ export default function examTutorExtension(
         return;
       }
 
+      examController = { ...examController, deferredDraft: undefined };
       const state = transition(activity.state, {
         type: "examDraftAccepted",
         questionId,
@@ -479,7 +496,7 @@ export default function examTutorExtension(
   const showExamReview = async (ctx: ExtensionContext): Promise<boolean> => {
     if (activity.state.tag !== "exam-active") return false;
     const { exam } = activity.state;
-    if (!ctx.hasUI) return true;
+    if (!ctx.hasUI) return false;
     const text = exam.items
       .map(({ id }) => {
         const status =
