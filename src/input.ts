@@ -3,6 +3,7 @@ import type { ExamDraft, ParseError, Submission } from "./domain.js";
 const confidenceHeader = /^\[confidence: (.+)\]$/;
 const examHeader = /^(.+)\. \[confidence: (.+)\]$/;
 
+/** Parses the legacy confidence-header grammar used only when no response UI exists. */
 export function parseAnswer(text: string): Submission | ParseError {
   const lines = text.split(/\r?\n/);
   const headerIndex = lines.findIndex((line) => line.trim() !== "");
@@ -26,6 +27,7 @@ export function parseAnswer(text: string): Submission | ParseError {
   return { answer, confidence };
 }
 
+/** Parses legacy bulk exam drafts only when no per-item response UI exists. */
 export function parseExamDraft(
   text: string,
   itemIds: readonly string[],

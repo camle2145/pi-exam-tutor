@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test } from "vitest";
 import { parseAnswer, parseExamDraft } from "../src/input.js";
 import { buildTutorPrompt } from "../src/prompt.js";
@@ -42,7 +43,7 @@ const awaitingAnswer: ActivityState = {
   revealed: false,
 };
 
-test("requires an integer confidence header before regular feedback", () => {
+test("parses integer confidence headers only for the no-UI fallback", () => {
   expect(parseAnswer("My answer")).toMatchObject({
     message: expect.stringContaining("[confidence:"),
   });
@@ -59,6 +60,20 @@ test("requires an integer confidence header before regular feedback", () => {
   });
   expect(parseAnswer("[confidence: 70]\n  ")).toMatchObject({
     message: expect.stringContaining("nonempty"),
+  });
+});
+
+test("documents header parsing as a no-UI fallback rather than the interactive protocol", async () => {
+  const readme = await readFile("README.md", "utf8");
+
+  expect(readme).toContain("Interactive response flow");
+  expect(readme).toContain("No-UI fallback syntax");
+  expect(readme).toContain("/resume-answer");
+});
+
+test("continues to reject malformed fallback confidence headers", () => {
+  expect(parseAnswer("not a header")).toMatchObject({
+    message: expect.any(String),
   });
 });
 
