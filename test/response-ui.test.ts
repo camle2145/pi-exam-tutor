@@ -146,7 +146,7 @@ test("corrections never request confidence even when the request requires it", a
   expect(tuiCustom).toHaveBeenCalledTimes(1);
 });
 
-test("starts supplied TUI confidence unconfirmed at 50", async () => {
+test("prefills supplied TUI confidence but requires reconfirmation", async () => {
   const values: number[] = [];
   let initialRender = "";
   let customCalls = 0;
@@ -190,10 +190,10 @@ test("starts supplied TUI confidence unconfirmed at 50", async () => {
       answer: "answer",
       confidence: 75,
     }),
-  ).resolves.toEqual({ kind: "submitted", answer: "answer", confidence: 45 });
-  expect(values).toEqual([50, 45]);
+  ).resolves.toEqual({ kind: "submitted", answer: "answer", confidence: 70 });
+  expect(values).toEqual([75, 70]);
   expect(initialRender).toContain(
-    "Confidence: 50 / 100 (adjust or type to confirm)",
+    "Confidence: 75 / 100 (adjust or type to confirm)",
   );
 });
 

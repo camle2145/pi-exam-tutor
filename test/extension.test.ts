@@ -73,6 +73,23 @@ const exam: ExamSession = {
   ],
   drafts: {},
 };
+const twoExamItems: Question[] = [
+  exam.items[0]!,
+  {
+    ...exam.items[0]!,
+    id: "2",
+    prompt: "second prompt",
+  },
+];
+const generatingExam: SessionActivity = {
+  schemaVersion: 1,
+  state: {
+    tag: "exam-generating",
+    courseId: course.id,
+    operationId: "operation-1",
+    startedAt: now.toISOString(),
+  },
+};
 const conceptProposal: CourseConceptProposal = {
   id: "newton-laws",
   name: "Newton's laws",
@@ -338,6 +355,36 @@ function createFakePi(
   };
 }
 
+function messageText(sent: unknown): string[] {
+  const message = (sent as { message?: { content?: unknown } }).message;
+  return typeof message?.content === "string" ? [message.content] : [];
+}
+
+function lastPersistedDraft(
+  fake: ReturnType<typeof createFakePi>,
+  questionId: string,
+): unknown {
+  const entry = fake.appendedEntries.at(-1)?.data as
+    SessionActivity | undefined;
+  return entry?.state.tag === "exam-active"
+    ? entry.state.exam.drafts[questionId]
+    : undefined;
+}
+
+function reviewText(fake: ReturnType<typeof createFakePi>): string {
+  const call = fake.ui.custom.mock.calls.at(-1);
+  const component = call?.[0](
+    {},
+    {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    },
+    {},
+    () => {},
+  );
+  return component?.render(120).join("\n") ?? "";
+}
+
 test("requests cited concept extraction after adding a material", async () => {
   const fake = createFakePi({ activity: idle });
   const dependencies = createDependencies();
@@ -436,6 +483,8 @@ test("locks every mode-changing command while an exam is active", async () => {
 
 test("sends actual-ID draft answers only after exam submission", async () => {
   const fake = createFakePi({ activity: activeExamWithAllDrafts });
+  fake.ui.custom.mockResolvedValueOnce(true);
+  fake.ui.select.mockResolvedValueOnce("submit");
   const dependencies = createDependencies({
     submitExam: vi.fn(async () => submittedExam),
   });
@@ -468,8 +517,11 @@ test("records all aggregate exam grades only from the canonical tool", async () 
   extension(fake.api, dependencies);
   await fake.startSession();
 
-  await fake.executeTool("tutor_record_exam_grades", { grades: [examGrade] });
+  const result = await fake.executeTool("tutor_record_exam_grades", {
+    grades: [examGrade],
+  });
 
+  expect(result.details.display).toContain("/courses/physics/notes.md");
   expect(dependencies.app.recordExamGrades).toHaveBeenCalledWith(
     submittedExam,
     [examGrade],
@@ -510,32 +562,145 @@ test("accepts an empty aggregate grade array for an exam with no drafts", async 
   );
 });
 
-test("upserts a partial exam draft and only notifies after every item is saved", async () => {
-  const twoItemExam: SessionActivity = {
+test("renders only the active exam item without source references", async () => {
+  const fake = createFakePi({ activity: generatingExam });
+  extension(
+    fake.api,
+    createDependencies({
+      recordExam: vi.fn(async (_current, presented) => ({
+        schemaVersion: 1,
+        state: { tag: "exam-active", courseId: course.id, exam: presented },
+      })),
+    }),
+  );
+  await fake.startSession();
+
+  const result = await fake.executeTool("tutor_present_exam", {
+    items: twoExamItems,
+  });
+  await fake.agentSettled();
+
+  expect(result).toMatchObject({
+    content: [{ type: "text", text: "Exam ready." }],
+    details: { display: "Exam ready." },
+  });
+  expect(fake.sentMessages).toContainEqual(
+    expect.objectContaining({
+      message: expect.objectContaining({
+        customType: "pi-exam-tutor/exam-item-v1",
+        content: expect.stringContaining("Explain acceleration."),
+      }),
+    }),
+  );
+  expect(fake.sentMessages.flatMap(messageText)).not.toContain(
+    "/courses/physics/notes.md",
+  );
+  expect(fake.sentMessages.flatMap(messageText)).not.toContain("second prompt");
+  expect(
+    JSON.stringify(
+      fake.sentMessages.find(
+        (sent) =>
+          (sent as { message?: { customType?: string } }).message
+            ?.customType === "pi-exam-tutor/exam-item-v1",
+      ),
+    ),
+  ).not.toContain("/courses/physics/notes.md");
+});
+
+test("saves an exam answer only after confidence and advances to the next item", async () => {
+  const fake = createFakePi({ activity: generatingExam });
+  fake.ui.custom.mockResolvedValueOnce({
+    kind: "submitted",
+    answer: "First",
+    confidence: 80,
+  });
+  extension(
+    fake.api,
+    createDependencies({
+      recordExam: vi.fn(async (_current, presented) => ({
+        schemaVersion: 1,
+        state: { tag: "exam-active", courseId: course.id, exam: presented },
+      })),
+    }),
+  );
+  await fake.startSession();
+
+  await fake.executeTool("tutor_present_exam", { items: twoExamItems });
+  await fake.agentSettled();
+
+  expect(fake.appendedEntries.at(-1)).toMatchObject({
+    data: {
+      state: { exam: { drafts: { "1": { answer: "First", confidence: 80 } } } },
+    },
+  });
+  expect(
+    fake.sentMessages
+      .map(
+        (sent) =>
+          (sent as { message?: { content?: unknown } }).message?.content,
+      )
+      .filter((content): content is string => typeof content === "string")
+      .at(-1),
+  ).toContain("second prompt");
+});
+
+test("does not overwrite a saved exam draft before reconfirmed confidence", async () => {
+  const savedExam: SessionActivity = {
     schemaVersion: 1,
     state: {
       tag: "exam-active",
       courseId: course.id,
       exam: {
         ...exam,
-        items: [exam.items[0]!, { ...exam.items[0]!, id: "second" }],
+        drafts: {
+          "1": {
+            answer: "original",
+            confidence: 80,
+            submittedAt: now.toISOString(),
+          },
+        },
       },
     },
   };
-  const fake = createFakePi({ activity: twoItemExam });
-  extension(fake.api, createDependencies());
+  const fake = createFakePi({ activity: savedExam });
+  fake.ui.custom.mockResolvedValueOnce({
+    kind: "deferred",
+    draft: { answer: "changed", confidence: 80 },
+  });
+  fake.ui.select.mockResolvedValueOnce("resume");
+  const dependencies = createDependencies();
+  extension(fake.api, dependencies);
   await fake.startSession();
 
-  await fake.dispatchInput("1. [confidence: 60]\nFirst");
-  expect(fake.ui.notify).toHaveBeenLastCalledWith(
-    "Exam draft saved locally",
-    "info",
+  await fake.invokeCommand("exam", "edit 1");
+
+  expect(lastPersistedDraft(fake, "1")).toBeUndefined();
+  expect(fake.appendedEntries).toEqual([]);
+  await expect(fake.invokeCommand("exam", "submit")).resolves.toBeUndefined();
+  expect(fake.ui.select).toHaveBeenCalledWith(
+    expect.stringContaining("pending edit"),
+    expect.arrayContaining(["resume", "discard"]),
   );
-  await fake.dispatchInput("second. [confidence: 80]\nSecond");
-  expect(fake.ui.notify).toHaveBeenLastCalledWith(
-    "All answers are saved. Amend any answer or run /exam submit.",
-    "info",
+  expect(dependencies.app.submitExam).not.toHaveBeenCalled();
+});
+
+test("shows review before manually submitting a partial exam", async () => {
+  const fake = createFakePi({ activity: activeExam });
+  fake.ui.custom.mockResolvedValueOnce(true);
+  fake.ui.select.mockResolvedValueOnce("submit");
+  extension(
+    fake.api,
+    createDependencies({ submitExam: vi.fn(async () => submittedExam) }),
   );
+  await fake.startSession();
+
+  await fake.invokeCommand("exam", "submit");
+
+  expect(fake.ui.custom).toHaveBeenCalledWith(
+    expect.any(Function),
+    expect.anything(),
+  );
+  expect(reviewText(fake)).toContain("Unanswered");
 });
 
 test("exports a Pi extension factory", () => {
@@ -598,8 +763,8 @@ test("registers every required tutor command and canonical tool", () => {
   );
 });
 
-test("handles a complete exam draft locally without sending it to the model", async () => {
-  const fake = createFakePi({ activity: activeExam });
+test("retains bulk exam draft parsing only without a UI", async () => {
+  const fake = createFakePi({ activity: activeExam, mode: "print" });
   extension(fake.api, createDependencies());
   await fake.startSession();
 
@@ -664,8 +829,8 @@ test("submits an active exam locally when its deadline expires", async () => {
   }
 });
 
-test("rejects malformed exam drafts locally without changing activity", async () => {
-  const fake = createFakePi({ activity: activeExam });
+test("rejects malformed bulk exam drafts only without a UI", async () => {
+  const fake = createFakePi({ activity: activeExam, mode: "print" });
   extension(fake.api, createDependencies());
   await fake.startSession();
 
@@ -674,10 +839,7 @@ test("rejects malformed exam drafts locally without changing activity", async ()
   });
   expect(fake.appendedEntries).toEqual([]);
   expect(fake.sentMessages).toEqual([]);
-  expect(fake.ui.notify).toHaveBeenCalledWith(
-    expect.stringContaining("configured question header"),
-    "error",
-  );
+  expect(fake.ui.notify).not.toHaveBeenCalled();
 });
 
 test("restores only the latest branch-local activity and injects its prompt", async () => {

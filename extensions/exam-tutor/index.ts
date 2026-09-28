@@ -7,7 +7,8 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, matchesKey, Text } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
   TutorApplicationService,
@@ -108,6 +109,51 @@ type LearnerResponseDetails = {
   mode: Exclude<TutorMode, "exam">;
 };
 
+interface ExamControllerState {
+  activeQuestionId?: string;
+  pendingEdit?: {
+    questionId: string;
+    answer: string;
+    previousConfidence: number;
+  };
+}
+
+const EXAM_REVIEW_OVERLAY = {
+  overlay: true,
+  overlayOptions: {
+    anchor: "bottom-center" as const,
+    width: "70%" as const,
+    maxHeight: "50%" as const,
+    margin: 1,
+  },
+};
+
+class ExamReviewPanel extends Container {
+  constructor(
+    text: string,
+    theme: Theme,
+    private readonly done: (confirmed: boolean) => void,
+  ) {
+    super();
+    this.addChild(
+      new Text(theme.fg("accent", theme.bold("Exam review")), 1, 1),
+    );
+    this.addChild(new Text(theme.fg("text", text), 1, 0));
+    this.addChild(
+      new Text(theme.fg("dim", "Enter choose action • Esc cancel"), 1, 0),
+    );
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, "enter")) {
+      this.done(true);
+    }
+    if (matchesKey(data, "escape")) {
+      this.done(false);
+    }
+  }
+}
+
 export default function examTutorExtension(
   pi: ExtensionAPI,
   suppliedDependencies?: ExamTutorAdapterDependencies,
@@ -118,6 +164,9 @@ export default function examTutorExtension(
   let activity: SessionActivity = idleActivity();
   let deadlineTimer: NodeJS.Timeout | undefined;
   let responseController: ResponseControllerState = { panelOpen: false };
+  let examController: ExamControllerState = {};
+  let examPanelOpen = false;
+  let openedExamQuestionId: string | undefined;
 
   const triggerTurn = (instruction: string): void => {
     pi.sendMessage(
@@ -173,8 +222,30 @@ export default function examTutorExtension(
     deadlineTimer.unref();
   };
 
+  const syncExamController = (next: SessionActivity): void => {
+    if (next.state.tag !== "exam-active") {
+      examController = {};
+      openedExamQuestionId = undefined;
+      return;
+    }
+    const { exam } = next.state;
+    const activeQuestionId = exam.items.find(
+      ({ id }) => !Object.hasOwn(exam.drafts, id),
+    )?.id;
+    if (examController.activeQuestionId !== activeQuestionId) {
+      openedExamQuestionId = undefined;
+    }
+    examController = {
+      activeQuestionId,
+      ...(examController.pendingEdit === undefined
+        ? {}
+        : { pendingEdit: examController.pendingEdit }),
+    };
+  };
+
   const persist = (next: SessionActivity, ctx: ExtensionContext): void => {
     activity = next;
+    syncExamController(next);
     responseController.deferred = undefined;
     responseController.openedFingerprint = undefined;
     pi.appendEntry(ACTIVITY_ENTRY_TYPE, next);
@@ -266,6 +337,198 @@ export default function examTutorExtension(
     }
   };
 
+  const showExamItem = (ctx: ExtensionContext): void => {
+    if (activity.state.tag !== "exam-active") return;
+    const { exam } = activity.state;
+    const activeQuestionId = examController.activeQuestionId;
+    const item = exam.items.find(({ id }) => id === activeQuestionId);
+    if (item === undefined) {
+      pi.sendMessage(
+        {
+          customType: "pi-exam-tutor/exam-item-v1",
+          content: "Review & Submit\nAll answers are saved.",
+          display: true,
+          details: {
+            progress: "Review & Submit",
+            prompt: "All answers are saved.",
+          },
+        },
+        { triggerTurn: false },
+      );
+      return;
+    }
+    const progress = `Question ${exam.items.findIndex(({ id }) => id === item.id) + 1} of ${exam.items.length}`;
+    pi.sendMessage(
+      {
+        customType: "pi-exam-tutor/exam-item-v1",
+        content: `${progress}\n${item.prompt}`,
+        display: true,
+        details: { progress, prompt: item.prompt },
+      },
+      { triggerTurn: false },
+    );
+  };
+
+  const collectExamResponse = async (
+    ctx: ExtensionContext,
+    questionId = examController.activeQuestionId,
+    edit?: { answer: string; confidence: number },
+  ): Promise<void> => {
+    if (activity.state.tag !== "exam-active" || questionId === undefined)
+      return;
+    const item = activity.state.exam.items.find(({ id }) => id === questionId);
+    if (
+      item === undefined ||
+      examPanelOpen ||
+      examController.pendingEdit !== undefined
+    ) {
+      return;
+    }
+    if (edit === undefined && openedExamQuestionId === questionId) return;
+
+    const persistedDraft = activity.state.exam.drafts[questionId];
+    const initial = edit ?? persistedDraft;
+    examPanelOpen = true;
+    openedExamQuestionId = questionId;
+    try {
+      const result = await collectResponse(ctx, {
+        purpose: "exam",
+        requiresConfidence: true,
+        ...(initial === undefined
+          ? {}
+          : { answer: initial.answer, confidence: initial.confidence }),
+      });
+      if (result.kind === "cancelled") return;
+      if (result.kind === "deferred") {
+        if (persistedDraft !== undefined) {
+          examController = {
+            ...examController,
+            pendingEdit: {
+              questionId,
+              answer: result.draft.answer,
+              previousConfidence: persistedDraft.confidence,
+            },
+          };
+          updateTutorStatus(ctx, activity);
+        }
+        return;
+      }
+      if (result.confidence === undefined) return;
+
+      const state = transition(activity.state, {
+        type: "examDraftAccepted",
+        questionId,
+        draft: {
+          answer: result.answer,
+          confidence: result.confidence,
+          submittedAt: clock.now().toISOString(),
+        },
+      });
+      persist({ schemaVersion: 1, state }, ctx);
+      showExamItem(ctx);
+    } catch (error) {
+      openedExamQuestionId = undefined;
+      notifyError(
+        ctx,
+        error instanceof Error
+          ? error.message
+          : "Exam answer could not be saved",
+      );
+    } finally {
+      examPanelOpen = false;
+    }
+  };
+
+  const editExamAnswer = async (
+    ctx: ExtensionContext,
+    rawQuestionId: string,
+  ): Promise<void> => {
+    if (activity.state.tag !== "exam-active") {
+      notifyError(ctx, "There is no active exam to edit");
+      return;
+    }
+    let questionId = rawQuestionId.trim();
+    if (questionId === "" && ctx.hasUI) {
+      questionId =
+        (await ctx.ui.select(
+          "Exam item to edit",
+          activity.state.exam.items.map(({ id }) => id),
+        )) ?? "";
+    }
+    const draft = activity.state.exam.drafts[questionId];
+    if (draft === undefined) {
+      notifyError(ctx, "Only saved exam answers can be edited");
+      return;
+    }
+    examController = {
+      ...examController,
+      pendingEdit: undefined,
+    };
+    openedExamQuestionId = undefined;
+    await collectExamResponse(ctx, questionId, draft);
+  };
+
+  const showExamReview = async (ctx: ExtensionContext): Promise<boolean> => {
+    if (activity.state.tag !== "exam-active") return false;
+    const { exam } = activity.state;
+    if (!ctx.hasUI) return true;
+    const text = exam.items
+      .map(({ id }) => {
+        const status =
+          examController.pendingEdit?.questionId === id
+            ? "Confidence reconfirmation pending"
+            : Object.hasOwn(exam.drafts, id)
+              ? "Answered"
+              : "Unanswered";
+        return `${id}: ${status}`;
+      })
+      .join("\n");
+    const reviewed = await ctx.ui.custom<boolean>(
+      (_tui, theme, _keybindings, done) =>
+        new ExamReviewPanel(text, theme, (confirmed) => done(confirmed)),
+      EXAM_REVIEW_OVERLAY,
+    );
+    if (reviewed !== true) return false;
+    const action = await ctx.ui.select("Exam review action", [
+      "submit",
+      ...exam.items
+        .filter(({ id }) => Object.hasOwn(exam.drafts, id))
+        .map(({ id }) => `edit ${id}`),
+      "cancel",
+    ]);
+    if (action === "submit") return true;
+    if (action?.startsWith("edit ")) {
+      await editExamAnswer(ctx, action.slice("edit ".length));
+    }
+    return false;
+  };
+
+  const submitExamWithReview = async (ctx: ExtensionContext): Promise<void> => {
+    if (examController.pendingEdit !== undefined) {
+      if (!ctx.hasUI) return;
+      const action = await ctx.ui.select("Resolve pending edit", [
+        "resume",
+        "discard",
+      ]);
+      if (action === "resume") {
+        const pending = examController.pendingEdit;
+        examController = { ...examController, pendingEdit: undefined };
+        openedExamQuestionId = undefined;
+        await collectExamResponse(ctx, pending.questionId, {
+          answer: pending.answer,
+          confidence: pending.previousConfidence,
+        });
+        return;
+      }
+      if (action !== "discard") return;
+      examController = { ...examController, pendingEdit: undefined };
+    }
+    if (!(await showExamReview(ctx))) return;
+    const next = await app.submitExam(activity);
+    persist(next, ctx);
+    triggerTurn(aggregateExamSubmission(next));
+  };
+
   const resumeAnswer = async (ctx: ExtensionContext): Promise<void> => {
     const pending = responseController.deferred;
     if (
@@ -294,6 +557,9 @@ export default function examTutorExtension(
 
   pi.on("session_start", async (_event, ctx) => {
     responseController = { panelOpen: false };
+    examController = {};
+    examPanelOpen = false;
+    openedExamQuestionId = undefined;
     let latestData: unknown;
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type === "custom" && entry.customType === ACTIVITY_ENTRY_TYPE) {
@@ -304,6 +570,7 @@ export default function examTutorExtension(
       latestData === undefined
         ? idleActivity()
         : app.restoreActivity(JSON.stringify(latestData));
+    syncExamController(activity);
     updateTutorStatus(ctx, activity);
     scheduleDeadline(activity, ctx);
   });
@@ -312,10 +579,14 @@ export default function examTutorExtension(
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
     deadlineTimer = undefined;
     responseController = { panelOpen: false };
+    examController = {};
+    examPanelOpen = false;
+    openedExamQuestionId = undefined;
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
     await collectPendingResponse(ctx);
+    await collectExamResponse(ctx);
   });
 
   pi.on("input", async (event, ctx) => {
@@ -332,7 +603,8 @@ export default function examTutorExtension(
       return { action: "handled" };
     }
 
-    if (activity.state.tag === "exam-active") {
+    if (activity.state.tag === "exam-active" && !ctx.hasUI) {
+      // Bulk draft syntax remains a locally enforced fallback without a TUI.
       const parsed = parseExamDraft(
         event.text,
         activity.state.exam.items.map(({ id }) => id),
@@ -365,6 +637,10 @@ export default function examTutorExtension(
           "info",
         );
       }
+      return { action: "handled" };
+    }
+
+    if (activity.state.tag === "exam-active") {
       return { action: "handled" };
     }
 
@@ -432,10 +708,12 @@ export default function examTutorExtension(
     selectedCourseId,
     triggerTurn,
     resumeAnswer,
+    editExamAnswer,
+    submitExamWithReview,
     dashboardBuilder,
   });
   registerMessageRenderers(pi);
-  registerTools(pi, app, () => activity, persist);
+  registerTools(pi, app, () => activity, persist, showExamItem);
 }
 
 function responseDetails(current: SessionActivity):
@@ -530,6 +808,8 @@ interface CommandRuntime {
   selectedCourseId(): string;
   triggerTurn(instruction: string): void;
   resumeAnswer(ctx: ExtensionContext): Promise<void>;
+  editExamAnswer(ctx: ExtensionContext, questionId: string): Promise<void>;
+  submitExamWithReview(ctx: ExtensionContext): Promise<void>;
   dashboardBuilder: (
     course: Course,
     history: Awaited<ReturnType<Store["getHistory"]>>,
@@ -648,10 +928,13 @@ function registerCommands(pi: ExtensionAPI, runtime: CommandRuntime): void {
   pi.registerCommand("exam", {
     description: "Start or submit a feedback-isolated exam",
     handler: async (args, ctx) => {
-      if (args.trim() === "submit") {
-        const next = await runtime.app.submitExam(runtime.getActivity());
-        runtime.persist(next, ctx);
-        runtime.triggerTurn(aggregateExamSubmission(next));
+      const { action, value } = splitCommand(args);
+      if (action === "submit" && value.trim() === "") {
+        await runtime.submitExamWithReview(ctx);
+        return;
+      }
+      if (action === "edit") {
+        await runtime.editExamAnswer(ctx, value);
         return;
       }
       assertExamUnlocked(runtime.getActivity());
@@ -723,6 +1006,7 @@ function registerTools(
   app: TutorApplication,
   getActivity: () => SessionActivity,
   persist: (next: SessionActivity, ctx: ExtensionContext) => void,
+  showExamItem: (ctx: ExtensionContext) => void,
 ): void {
   const questionTool = (
     name: "tutor_present_question" | "tutor_present_transfer",
@@ -779,13 +1063,8 @@ function registerTools(
       };
       const next = await app.recordExam(current, exam);
       persist(next, ctx);
-      const display = exam.items
-        .map(
-          (item) =>
-            `${item.id}. ${item.prompt}\nSource: ${citations(item.sourceRefs)}`,
-        )
-        .join("\n\n");
-      return toolResult(display, "Exam presented without feedback.");
+      showExamItem(ctx);
+      return toolResult("Exam ready.", "Exam ready.");
     },
     renderCall(_args, theme) {
       return new Text(theme.fg("toolTitle", "Tutor exam"), 0, 0);
@@ -949,16 +1228,30 @@ function registerTools(
     }),
     executionMode: "sequential",
     async execute(_id, params, _signal, _update, ctx) {
+      const submitted = getActivity();
       const next = await app.recordExamGrades(
-        getActivity(),
+        submitted,
         params.grades as ExamGrade[],
       );
       persist(next, ctx);
+      const sourceByQuestionId =
+        submitted.state.tag === "exam-submitted"
+          ? new Map(
+              submitted.state.exam.items.map(({ id, sourceRefs }) => [
+                id,
+                sourceRefs,
+              ]),
+            )
+          : new Map<string, SourceReference[]>();
       const display = (params.grades as ExamGrade[])
-        .map(
-          (grade) =>
-            `${grade.questionId}: ${grade.correctness}\n${grade.gradingRationale}`,
-        )
+        .map((grade) => {
+          const sources = sourceByQuestionId.get(grade.questionId) ?? [];
+          return [
+            `${grade.questionId}: ${grade.correctness}`,
+            grade.gradingRationale,
+            ...(sources.length === 0 ? [] : [`Sources: ${citations(sources)}`]),
+          ].join("\n");
+        })
         .join("\n\n");
       return toolResult(display, "Aggregate exam grades recorded.");
     },

@@ -175,7 +175,7 @@ export class ConfidencePanel implements Component {
   private completed: ResponseResult | undefined;
 
   constructor(private readonly options: ConfidencePanelOptions) {
-    this.confidence = 50;
+    this.confidence = options.confidence ?? 50;
   }
 
   value(): number {
