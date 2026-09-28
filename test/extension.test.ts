@@ -644,6 +644,45 @@ test("saves an exam answer only after confidence and advances to the next item",
   ).toContain("second prompt");
 });
 
+test.each([
+  ["deferred", { kind: "deferred", draft: { answer: "later" } }],
+  ["cancelled", { kind: "cancelled" }],
+])(
+  "reopens an unanswered exam item after a %s response without duplicate panels",
+  async (_outcome, interruptedResponse) => {
+    const fake = createFakePi({ activity: activeExam });
+    fake.ui.custom
+      .mockResolvedValueOnce(interruptedResponse)
+      .mockResolvedValueOnce({
+        kind: "submitted",
+        answer: "Acceleration changes velocity.",
+        confidence: 80,
+      });
+    extension(fake.api, createDependencies());
+    await fake.startSession();
+
+    await fake.agentSettled();
+    await fake.agentSettled();
+    await fake.agentSettled();
+
+    expect(fake.ui.custom).toHaveBeenCalledTimes(2);
+    expect(fake.appendedEntries.at(-1)).toMatchObject({
+      data: {
+        state: {
+          exam: {
+            drafts: {
+              "1": {
+                answer: "Acceleration changes velocity.",
+                confidence: 80,
+              },
+            },
+          },
+        },
+      },
+    });
+  },
+);
+
 test("does not overwrite a saved exam draft before reconfirmed confidence", async () => {
   const savedExam: SessionActivity = {
     schemaVersion: 1,

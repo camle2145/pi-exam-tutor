@@ -398,7 +398,10 @@ export default function examTutorExtension(
           ? {}
           : { answer: initial.answer, confidence: initial.confidence }),
       });
-      if (result.kind === "cancelled") return;
+      if (result.kind === "cancelled") {
+        if (persistedDraft === undefined) openedExamQuestionId = undefined;
+        return;
+      }
       if (result.kind === "deferred") {
         if (persistedDraft !== undefined) {
           examController = {
@@ -410,10 +413,15 @@ export default function examTutorExtension(
             },
           };
           updateTutorStatus(ctx, activity);
+        } else {
+          openedExamQuestionId = undefined;
         }
         return;
       }
-      if (result.confidence === undefined) return;
+      if (result.confidence === undefined) {
+        openedExamQuestionId = undefined;
+        return;
+      }
 
       const state = transition(activity.state, {
         type: "examDraftAccepted",
