@@ -644,40 +644,64 @@ test("saves an exam answer only after confidence and advances to the next item",
   ).toContain("second prompt");
 });
 
-test("resumes a deferred unanswered exam response with its adapter-memory draft", async () => {
+test("resumes a deferred unanswered exam response with prefilled reconfirmable confidence", async () => {
   const fake = createFakePi({ activity: activeExam });
   fake.ui.custom
-    .mockResolvedValueOnce({ kind: "deferred", draft: { answer: "later" } })
     .mockResolvedValueOnce({
-      kind: "submitted",
-      answer: "Acceleration changes velocity.",
-      confidence: 80,
-    });
+      kind: "deferred",
+      draft: { answer: "later", confidence: 80 },
+    })
+    .mockImplementationOnce(
+      async (factory) =>
+        new Promise((resolve) => {
+          const panel = factory(
+            { requestRender: vi.fn(), terminal: { rows: 40 } },
+            {
+              fg: (_color: string, text: string) => text,
+              borderColor: (text: string) => text,
+            },
+            {},
+            resolve,
+          );
+          expect(panel.render(120).join("\n")).toContain("later");
+          panel.handleInput("\r");
+        }),
+    )
+    .mockImplementationOnce(
+      async (factory) =>
+        new Promise((resolve) => {
+          const panel = factory(
+            { requestRender: vi.fn(), terminal: { rows: 40 } },
+            {
+              fg: (_color: string, text: string) => text,
+              borderColor: (text: string) => text,
+            },
+            {},
+            resolve,
+          );
+          expect(panel.value()).toBe(80);
+          expect(panel.render(120).join("\n")).toContain(
+            "Confidence: 80 / 100 (adjust or type to confirm)",
+          );
+          panel.handleInput("\x1b[D");
+          panel.handleInput("\r");
+        }),
+    );
   extension(fake.api, createDependencies());
   await fake.startSession();
 
   await fake.agentSettled();
   await fake.agentSettled();
 
-  expect(fake.ui.custom).toHaveBeenCalledTimes(2);
-  const resumedPanel = fake.ui.custom.mock.calls[1]?.[0](
-    { requestRender: vi.fn(), terminal: { rows: 40 } },
-    {
-      fg: (_color: string, text: string) => text,
-      borderColor: (text: string) => text,
-    },
-    {},
-    vi.fn(),
-  );
-  expect(resumedPanel.render(120).join("\n")).toContain("later");
+  expect(fake.ui.custom).toHaveBeenCalledTimes(3);
   expect(fake.appendedEntries.at(-1)).toMatchObject({
     data: {
       state: {
         exam: {
           drafts: {
             "1": {
-              answer: "Acceleration changes velocity.",
-              confidence: 80,
+              answer: "later",
+              confidence: 75,
             },
           },
         },
