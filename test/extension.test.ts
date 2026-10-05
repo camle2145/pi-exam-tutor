@@ -1,393 +1,34 @@
 import { readFile } from "node:fs/promises";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
 import { expect, test, vi } from "vitest";
-import extension, {
-  type ExamTutorAdapterDependencies,
-} from "../extensions/exam-tutor/index.js";
-import type { TutorApplication } from "../src/application.js";
-import type {
-  Course,
-  CourseConceptProposal,
-  Dashboard,
-  ExamGrade,
-  ExamSession,
-  Question,
-  SessionActivity,
-} from "../src/domain.js";
-import type { Store } from "../src/storage.js";
-
-const now = new Date("2026-08-27T09:00:00.000Z");
-const course: Course = {
-  schemaVersion: 1,
-  id: "course-1",
-  name: "Physics",
-  revision: 1,
-  createdAt: now.toISOString(),
-  appliedOperationIds: [],
-  partialAnswerPolicy: "remediate",
-  materials: [
-    {
-      id: "material-1",
-      path: "/courses/physics/notes.md",
-      addedAt: now.toISOString(),
-    },
-  ],
-  concepts: [{ id: "kinematics", name: "Kinematics" }],
-  proposedConcepts: [],
-};
-const question: Question = {
-  id: "question-1",
-  kind: "primary",
-  targetConceptId: "kinematics",
-  prompt: "How does acceleration affect velocity?",
-  sourceRefs: [
-    {
-      materialId: "material-1",
-      path: "/courses/physics/notes.md",
-      locator: "# acceleration",
-    },
-  ],
-};
-const exam: ExamSession = {
-  id: "exam-1",
-  operationId: "operation-1",
-  startedAt: now.toISOString(),
-  status: "active",
-  items: [
-    {
-      id: "1",
-      kind: "exam",
-      targetConceptId: "kinematics",
-      prompt: "Explain acceleration.",
-      sourceRefs: [
-        {
-          materialId: "material-1",
-          path: "/courses/physics/notes.md",
-          locator: "# acceleration",
-        },
-      ],
-    },
-  ],
-  drafts: {},
-};
-const twoExamItems: Question[] = [
-  exam.items[0]!,
-  {
-    ...exam.items[0]!,
-    id: "2",
-    prompt: "second prompt",
-  },
-];
-const generatingExam: SessionActivity = {
-  schemaVersion: 1,
-  state: {
-    tag: "exam-generating",
-    courseId: course.id,
-    operationId: "operation-1",
-    startedAt: now.toISOString(),
-  },
-};
-const conceptProposal: CourseConceptProposal = {
-  id: "newton-laws",
-  name: "Newton's laws",
-  sourceRefs: [
-    {
-      materialId: "material-1",
-      path: "/courses/physics/notes.md",
-      locator: "# laws",
-    },
-  ],
-};
-const examGrade: ExamGrade = {
-  questionId: "exam-question-id",
-  correctness: "correct",
-  gradingRationale: "Complete.",
-};
-const examWithActualId: ExamSession = {
-  ...exam,
-  items: [{ ...exam.items[0]!, id: "exam-question-id" }],
-  drafts: {
-    "exam-question-id": {
-      answer: "Acceleration changes velocity.",
-      confidence: 80,
-      submittedAt: now.toISOString(),
-    },
-  },
-};
-const activeExamWithAllDrafts: SessionActivity = {
-  schemaVersion: 1,
-  state: { tag: "exam-active", courseId: course.id, exam: examWithActualId },
-};
-const submittedExam: SessionActivity = {
-  schemaVersion: 1,
-  state: {
-    tag: "exam-submitted",
-    courseId: course.id,
-    exam: {
-      ...examWithActualId,
-      status: "submitted",
-      submittedAt: now.toISOString(),
-    },
-  },
-};
-
-const idle: SessionActivity = {
-  schemaVersion: 1,
-  state: { tag: "idle", courseId: course.id },
-};
-const activeExam: SessionActivity = {
-  schemaVersion: 1,
-  state: { tag: "exam-active", courseId: course.id, exam },
-};
-const awaitingAnswer: SessionActivity = {
-  schemaVersion: 1,
-  state: {
-    tag: "awaiting-primary-answer",
-    courseId: course.id,
-    mode: "study",
-    question,
-    hintLevel: 0,
-    revealed: false,
-  },
-};
-const awaitingGrade: SessionActivity = {
-  schemaVersion: 1,
-  state: {
-    tag: "awaiting-grade",
-    courseId: course.id,
-    mode: "study",
-    attemptId: "attempt-1",
-    purpose: "primary",
-    question,
-    hintLevel: 0,
-  },
-};
-
-function createDependencies(
-  overrides: Partial<TutorApplication> = {},
-): ExamTutorAdapterDependencies & { app: TutorApplication } {
-  const app = {
-    createCourse: vi.fn(async () => course),
-    selectCourse: vi.fn(async () => idle),
-    addMaterial: vi.fn(async () => course),
-    requestMode: vi.fn(async () => idle),
-    recordQuestion: vi.fn(async () => idle),
-    acceptSubmission: vi.fn(async () => idle),
-    requestHint: vi.fn(async () => idle),
-    recordHint: vi.fn(async () => idle),
-    requestReveal: vi.fn(async () => idle),
-    recordSolution: vi.fn(async () => idle),
-    recordGrade: vi.fn(async () => idle),
-    recordExplanation: vi.fn(async () => idle),
-    recordExam: vi.fn(async () => activeExam),
-    submitExam: vi.fn(async () => idle),
-    proposeConcepts: vi.fn(async () => ({
-      ...course,
-      proposedConcepts: [conceptProposal],
-    })),
-    approveConcepts: vi.fn(async () => course),
-    editProposedConcept: vi.fn(async () => course),
-    removeProposedConcept: vi.fn(async () => course),
-    recordExamGrades: vi.fn(async () => idle),
-    serializeActivity: vi.fn((activity: SessionActivity) =>
-      JSON.stringify(activity),
-    ),
-    restoreActivity: vi.fn((snapshot: string) => JSON.parse(snapshot)),
-    ...overrides,
-  } as TutorApplication;
-  const dashboard: Dashboard = {
-    courseId: course.id,
-    dueUnassisted: [],
-    dueAssisted: [],
-    unaidedCorrectRetrievalCount: 0,
-    unaidedEvidence: "not demonstrated",
-    confidenceCalibration: [
-      { range: "0–24", attempts: 0 },
-      { range: "25–49", attempts: 0 },
-      { range: "50–74", attempts: 0 },
-      { range: "75–100", attempts: 0 },
-    ],
-    maximumHintLevel: 0,
-    hintReliance: { assistedAttempts: 0, totalAttempts: 0 },
-    misconceptions: [],
-    unansweredExamItems: [],
-  };
-  const store = {
-    listCourses: vi.fn(async () => [course]),
-    getCourse: vi.fn(async () => course),
-    getHistory: vi.fn(async () => ({
-      schemaVersion: 1 as const,
-      courseId: course.id,
-      revision: 0,
-      appliedOperationIds: [],
-      attempts: [],
-      concepts: {},
-    })),
-  } as unknown as Store;
-  return {
-    app,
-    store,
-    clock: { now: () => new Date(now) },
-    buildDashboard: vi.fn(() => dashboard),
-  };
-}
-
-function createFakePi(
-  options: {
-    activity?: SessionActivity;
-    activities?: SessionActivity[];
-    mode?: ExtensionContext["mode"];
-  } = {},
-) {
-  const commands = new Map<
-    string,
-    { handler: Function; description?: string }
-  >();
-  const tools = new Map<
-    string,
-    {
-      execute: Function;
-      renderResult?: Function;
-      executionMode?: string;
-      parameters?: unknown;
-    }
-  >();
-  const handlers = new Map<string, Function[]>();
-  const appendedEntries: Array<{ customType: string; data: unknown }> = [];
-  const sentMessages: unknown[] = [];
-  const branch = (
-    options.activities ??
-    (options.activity === undefined ? [] : [options.activity])
-  ).map((activity) => ({
-    type: "custom",
-    customType: "pi-exam-tutor/activity-v1",
-    data: activity,
-  }));
-  const ui = {
-    notify: vi.fn(),
-    setStatus: vi.fn(),
-    setWidget: vi.fn(),
-    setEditorText: vi.fn(),
-    select: vi.fn(),
-    input: vi.fn(),
-    custom: vi.fn(async () => undefined),
-    theme: {
-      fg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
-    },
-  };
-  const context = {
-    mode: options.mode ?? "tui",
-    hasUI: (options.mode ?? "tui") === "tui",
-    cwd: process.cwd(),
-    ui,
-    sessionManager: { getBranch: () => branch },
-  } as unknown as ExtensionContext;
-  const api = {
-    registerCommand(name: string, definition: { handler: Function }) {
-      commands.set(name, definition);
-    },
-    registerTool(definition: {
-      name: string;
-      execute: Function;
-      parameters?: unknown;
-    }) {
-      tools.set(definition.name, definition);
-    },
-    on(name: string, handler: Function) {
-      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
-    },
-    appendEntry(customType: string, data: unknown) {
-      appendedEntries.push({ customType, data });
-    },
-    sendMessage(message: unknown, sendOptions?: unknown) {
-      sentMessages.push({ message, options: sendOptions });
-    },
-    registerMessageRenderer: vi.fn(),
-  } as unknown as ExtensionAPI;
-
-  return {
-    api,
-    appendedEntries,
-    context,
-    sentMessages,
-    ui,
-    commandNames: () => [...commands.keys()],
-    toolNames: () => [...tools.keys()],
-    async dispatchInput(text: string) {
-      const [handler] = handlers.get("input") ?? [];
-      return handler?.({ type: "input", text, source: "interactive" }, context);
-    },
-    async startSession() {
-      for (const handler of handlers.get("session_start") ?? []) {
-        await handler({ type: "session_start", reason: "startup" }, context);
-      }
-    },
-    async beforeAgentStart(systemPrompt = "base prompt") {
-      const [handler] = handlers.get("before_agent_start") ?? [];
-      return handler?.(
-        {
-          type: "before_agent_start",
-          prompt: "prompt",
-          systemPrompt,
-          systemPromptOptions: {},
-        },
-        context,
-      );
-    },
-    async agentSettled() {
-      for (const handler of handlers.get("agent_settled") ?? []) {
-        await handler({ type: "agent_settled" }, context);
-      }
-    },
-    async invokeCommand(name: string, args = "") {
-      return commands.get(name)?.handler(args, context);
-    },
-    async executeTool(name: string, params: unknown) {
-      return tools
-        .get(name)
-        ?.execute("tool-1", params, undefined, undefined, context);
-    },
-    tool: (name: string) => tools.get(name),
-  };
-}
-
-function messageText(sent: unknown): string[] {
-  const message = (sent as { message?: { content?: unknown } }).message;
-  return typeof message?.content === "string" ? [message.content] : [];
-}
-
-function lastPersistedDraft(
-  fake: ReturnType<typeof createFakePi>,
-  questionId: string,
-): unknown {
-  const entry = fake.appendedEntries.at(-1)?.data as
-    SessionActivity | undefined;
-  return entry?.state.tag === "exam-active"
-    ? entry.state.exam.drafts[questionId]
-    : undefined;
-}
-
-function reviewText(fake: ReturnType<typeof createFakePi>): string {
-  const call = fake.ui.custom.mock.calls.at(-1);
-  const component = call?.[0](
-    {},
-    {
-      fg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
-    },
-    {},
-    () => {},
-  );
-  return component?.render(120).join("\n") ?? "";
-}
+import extension from "../extensions/exam-tutor/index.js";
+import type { SessionActivity } from "../src/domain.js";
+import {
+  activeExam,
+  activeExamWithAllDrafts,
+  awaitingAnswer,
+  awaitingGrade,
+  conceptProposal,
+  course,
+  createExtensionDependencies,
+  exam,
+  examGrade,
+  generatingExam,
+  idle,
+  now,
+  question,
+  submittedExam,
+  twoExamItems,
+} from "./extension/fixtures.js";
+import {
+  createFakePi,
+  lastPersistedDraft,
+  messageText,
+  reviewText,
+} from "./extension/fake-pi.js";
 
 test("requests cited concept extraction after adding a material", async () => {
   const fake = createFakePi({ activity: idle });
-  const dependencies = createDependencies();
+  const dependencies = createExtensionDependencies();
   extension(fake.api, dependencies);
   await fake.startSession();
 
@@ -415,7 +56,7 @@ test("requests cited concept extraction after adding a material", async () => {
 
 test("keeps proposed concepts pending until an explicit approve command", async () => {
   const fake = createFakePi({ activity: idle });
-  const dependencies = createDependencies();
+  const dependencies = createExtensionDependencies();
   extension(fake.api, dependencies);
   await fake.startSession();
 
@@ -433,7 +74,7 @@ test("keeps proposed concepts pending until an explicit approve command", async 
 
 test("clears a proposed concept parent when the parent command omits its ID", async () => {
   const fake = createFakePi({ activity: idle });
-  const dependencies = createDependencies();
+  const dependencies = createExtensionDependencies();
   extension(fake.api, dependencies);
   await fake.startSession();
 
@@ -450,7 +91,9 @@ test("locks every mode-changing command while an exam is active", async () => {
   const fake = createFakePi({ activity: activeExam });
   extension(
     fake.api,
-    createDependencies({ submitExam: vi.fn(async () => submittedExam) }),
+    createExtensionDependencies({
+      submitExam: vi.fn(async () => submittedExam),
+    }),
   );
   await fake.startSession();
 
@@ -485,7 +128,7 @@ test("sends actual-ID draft answers only after exam submission", async () => {
   const fake = createFakePi({ activity: activeExamWithAllDrafts });
   fake.ui.custom.mockResolvedValueOnce(true);
   fake.ui.select.mockResolvedValueOnce("submit");
-  const dependencies = createDependencies({
+  const dependencies = createExtensionDependencies({
     submitExam: vi.fn(async () => submittedExam),
   });
   extension(fake.api, dependencies);
@@ -511,7 +154,7 @@ test("sends actual-ID draft answers only after exam submission", async () => {
 
 test("records all aggregate exam grades only from the canonical tool", async () => {
   const fake = createFakePi({ activity: submittedExam });
-  const dependencies = createDependencies({
+  const dependencies = createExtensionDependencies({
     recordExamGrades: vi.fn(async () => idle),
   });
   extension(fake.api, dependencies);
@@ -543,7 +186,7 @@ test("accepts an empty aggregate grade array for an exam with no drafts", async 
     },
   };
   const fake = createFakePi({ activity: zeroDraftExam });
-  const dependencies = createDependencies({
+  const dependencies = createExtensionDependencies({
     recordExamGrades: vi.fn(async () => idle),
   });
   extension(fake.api, dependencies);
@@ -566,7 +209,7 @@ test("renders only the active exam item without source references", async () => 
   const fake = createFakePi({ activity: generatingExam });
   extension(
     fake.api,
-    createDependencies({
+    createExtensionDependencies({
       recordExam: vi.fn(async (_current, presented) => ({
         schemaVersion: 1,
         state: { tag: "exam-active", courseId: course.id, exam: presented },
@@ -616,7 +259,7 @@ test("saves an exam answer only after confidence and advances to the next item",
   });
   extension(
     fake.api,
-    createDependencies({
+    createExtensionDependencies({
       recordExam: vi.fn(async (_current, presented) => ({
         schemaVersion: 1,
         state: { tag: "exam-active", courseId: course.id, exam: presented },
@@ -687,7 +330,7 @@ test("resumes a deferred unanswered exam response with prefilled reconfirmable c
           panel.handleInput("\r");
         }),
     );
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
   await fake.startSession();
 
   await fake.agentSettled();
@@ -724,7 +367,7 @@ test("reopens a cancelled unanswered exam item without duplicate panels", async 
       answer: "Acceleration changes velocity.",
       confidence: 80,
     });
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
   await fake.startSession();
 
   await fake.agentSettled();
@@ -772,7 +415,7 @@ test("does not overwrite a saved exam draft before reconfirmed confidence", asyn
     draft: { answer: "changed", confidence: 80 },
   });
   fake.ui.select.mockResolvedValueOnce("resume");
-  const dependencies = createDependencies();
+  const dependencies = createExtensionDependencies();
   extension(fake.api, dependencies);
   await fake.startSession();
 
@@ -794,7 +437,9 @@ test("shows review before manually submitting a partial exam", async () => {
   fake.ui.select.mockResolvedValueOnce("submit");
   extension(
     fake.api,
-    createDependencies({ submitExam: vi.fn(async () => submittedExam) }),
+    createExtensionDependencies({
+      submitExam: vi.fn(async () => submittedExam),
+    }),
   );
   await fake.startSession();
 
@@ -810,7 +455,7 @@ test("shows review before manually submitting a partial exam", async () => {
 test("does not submit a partial exam manually without an interactive review", async () => {
   const submitExam = vi.fn(async () => submittedExam);
   const fake = createFakePi({ activity: activeExam, mode: "print" });
-  extension(fake.api, createDependencies({ submitExam }));
+  extension(fake.api, createExtensionDependencies({ submitExam }));
   await fake.startSession();
 
   await fake.invokeCommand("exam", "submit");
@@ -840,7 +485,7 @@ test("documents the reusable closed-book tutor protocol", async () => {
 
 test("registers every required tutor command and canonical tool", () => {
   const fake = createFakePi();
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
 
   expect(fake.commandNames()).toEqual(
     expect.arrayContaining([
@@ -881,7 +526,7 @@ test("registers every required tutor command and canonical tool", () => {
 
 test("retains bulk exam draft parsing only without a UI", async () => {
   const fake = createFakePi({ activity: activeExam, mode: "print" });
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
   await fake.startSession();
 
   const result = await fake.dispatchInput("1. [confidence: 80]\nanswer");
@@ -928,7 +573,7 @@ test("submits an active exam locally when its deadline expires", async () => {
     };
     const submitExam = vi.fn(async () => submitted);
     const fake = createFakePi({ activity: timedExam });
-    extension(fake.api, createDependencies({ submitExam }));
+    extension(fake.api, createExtensionDependencies({ submitExam }));
     await fake.startSession();
 
     await vi.advanceTimersByTimeAsync(60_001);
@@ -947,7 +592,7 @@ test("submits an active exam locally when its deadline expires", async () => {
 
 test("rejects malformed bulk exam drafts only without a UI", async () => {
   const fake = createFakePi({ activity: activeExam, mode: "print" });
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
   await fake.startSession();
 
   expect(await fake.dispatchInput("answer without confidence")).toEqual({
@@ -959,7 +604,7 @@ test("rejects malformed bulk exam drafts only without a UI", async () => {
 });
 
 test("restores only the latest branch-local activity and injects its prompt", async () => {
-  const dependencies = createDependencies();
+  const dependencies = createExtensionDependencies();
   const fake = createFakePi({ activities: [idle, awaitingAnswer] });
   extension(fake.api, dependencies);
 
@@ -979,7 +624,7 @@ test("restores only the latest branch-local activity and injects its prompt", as
 
 test("does not inject tutor policy while activity is idle", async () => {
   const fake = createFakePi({ activity: idle });
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
   await fake.startSession();
 
   expect(await fake.beforeAgentStart()).toBeUndefined();
@@ -987,7 +632,7 @@ test("does not inject tutor policy while activity is idle", async () => {
 
 test("opens one response panel after the tutor turn settles", async () => {
   const fake = createFakePi({ activity: awaitingAnswer });
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
   await fake.startSession();
 
   await fake.agentSettled();
@@ -1006,7 +651,7 @@ test("settles before an interactive response panel is completed", async () => {
         resolvePanel = resolve;
       }),
   );
-  extension(fake.api, createDependencies({ acceptSubmission }));
+  extension(fake.api, createExtensionDependencies({ acceptSubmission }));
   await fake.startSession();
 
   const settled = fake.agentSettled();
@@ -1037,7 +682,7 @@ test("settles before an interactive response panel is completed", async () => {
 
 test("persists and sends a confirmed answer as a custom learner message", async () => {
   const acceptSubmission = vi.fn(async () => awaitingGrade);
-  const dependencies = createDependencies({ acceptSubmission });
+  const dependencies = createExtensionDependencies({ acceptSubmission });
   const fake = createFakePi({ activity: awaitingAnswer });
   fake.ui.custom.mockResolvedValueOnce({
     kind: "submitted",
@@ -1073,7 +718,7 @@ test("defers without persistence and restores ordinary typed text", async () => 
     kind: "deferred",
     draft: { answer: "x" },
   });
-  const dependencies = createDependencies();
+  const dependencies = createExtensionDependencies();
   extension(fake.api, dependencies);
   await fake.startSession();
 
@@ -1100,7 +745,7 @@ test("resumes the matching deferred response with its draft", async () => {
       answer: "draft",
       confidence: 60,
     });
-  extension(fake.api, createDependencies({ acceptSubmission }));
+  extension(fake.api, createExtensionDependencies({ acceptSubmission }));
   await fake.startSession();
   await fake.agentSettled();
 
@@ -1115,7 +760,7 @@ test("resumes the matching deferred response with its draft", async () => {
 test("retains header parsing for regular answers without a UI", async () => {
   const acceptSubmission = vi.fn(async () => awaitingGrade);
   const fake = createFakePi({ activity: awaitingAnswer, mode: "print" });
-  extension(fake.api, createDependencies({ acceptSubmission }));
+  extension(fake.api, createExtensionDependencies({ acceptSubmission }));
   await fake.startSession();
 
   await expect(
@@ -1148,7 +793,7 @@ test("collects a correction without confidence", async () => {
     kind: "submitted",
     answer: "Corrected answer.",
   });
-  extension(fake.api, createDependencies({ acceptSubmission }));
+  extension(fake.api, createExtensionDependencies({ acceptSubmission }));
   await fake.startSession();
 
   await fake.agentSettled();
@@ -1160,7 +805,7 @@ test("collects a correction without confidence", async () => {
 
 test("canonical grade tool calls one application use case and persists activity", async () => {
   const recordGrade = vi.fn(async () => idle);
-  const dependencies = createDependencies({ recordGrade });
+  const dependencies = createExtensionDependencies({ recordGrade });
   const fake = createFakePi({ activity: awaitingGrade });
   extension(fake.api, dependencies);
   await fake.startSession();
@@ -1189,7 +834,7 @@ test("canonical grade tool calls one application use case and persists activity"
 test("canonical tools reject a citation not configured for the current question", async () => {
   const recordGrade = vi.fn(async () => idle);
   const fake = createFakePi({ activity: awaitingGrade });
-  extension(fake.api, createDependencies({ recordGrade }));
+  extension(fake.api, createExtensionDependencies({ recordGrade }));
   await fake.startSession();
 
   await expect(
@@ -1206,7 +851,7 @@ test("canonical tools reject a citation not configured for the current question"
 test("present-exam rejects an invalid state before calling the application", async () => {
   const recordExam = vi.fn(async () => activeExam);
   const fake = createFakePi({ activity: idle });
-  extension(fake.api, createDependencies({ recordExam }));
+  extension(fake.api, createExtensionDependencies({ recordExam }));
   await fake.startSession();
 
   await expect(
@@ -1233,7 +878,7 @@ test("present-exam rejects duplicate generated item IDs without persisting", asy
     { ...exam.items[0]!, id: "duplicate" },
   ];
   const fake = createFakePi({ activity: generatingExam });
-  extension(fake.api, createDependencies({ recordExam }));
+  extension(fake.api, createExtensionDependencies({ recordExam }));
   await fake.startSession();
 
   await expect(
@@ -1250,7 +895,7 @@ test("custom tool renderer exposes canonical learner-facing feedback", async () 
   const fake = createFakePi({ activity: awaitingGrade });
   extension(
     fake.api,
-    createDependencies({ recordGrade: vi.fn(async () => idle) }),
+    createExtensionDependencies({ recordGrade: vi.fn(async () => idle) }),
   );
   await fake.startSession();
   const result = await fake.executeTool("tutor_record_grade", {
@@ -1277,7 +922,7 @@ test("custom tool renderer exposes canonical learner-facing feedback", async () 
 
 test("all state-mutating tutor tools execute sequentially", () => {
   const fake = createFakePi();
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
 
   for (const name of fake.toolNames()) {
     expect(fake.tool(name)?.executionMode).toBe("sequential");
@@ -1285,7 +930,7 @@ test("all state-mutating tutor tools execute sequentially", () => {
 });
 
 test("uses interactive input when course creation omits its name", async () => {
-  const dependencies = createDependencies();
+  const dependencies = createExtensionDependencies();
   const fake = createFakePi();
   fake.ui.input.mockResolvedValueOnce("New course");
   extension(fake.api, dependencies);
@@ -1299,7 +944,7 @@ test("uses interactive input when course creation omits its name", async () => {
 
 test("uses the custom TUI dashboard only in TUI mode", async () => {
   const fake = createFakePi({ activity: idle, mode: "tui" });
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
   await fake.startSession();
 
   await fake.invokeCommand("dashboard");
@@ -1310,7 +955,7 @@ test("uses the custom TUI dashboard only in TUI mode", async () => {
 
 test("renders dashboard as a non-triggering custom message outside TUI", async () => {
   const fake = createFakePi({ activity: idle, mode: "print" });
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
   await fake.startSession();
 
   await fake.invokeCommand("dashboard");
@@ -1328,7 +973,7 @@ test("renders dashboard as a non-triggering custom message outside TUI", async (
 
 test("study-off persists idle state and clears tutor status and widget", async () => {
   const fake = createFakePi({ activity: awaitingAnswer });
-  extension(fake.api, createDependencies());
+  extension(fake.api, createExtensionDependencies());
   await fake.startSession();
 
   await fake.invokeCommand("study-off");

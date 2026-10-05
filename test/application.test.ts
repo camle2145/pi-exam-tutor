@@ -1,63 +1,11 @@
 import { expect, test } from "vitest";
-import {
-  assertCourseInvariant,
-  type Course,
-  type Question,
-} from "../src/domain.js";
+import { assertCourseInvariant, type Course } from "../src/domain.js";
 import { TutorApplicationService } from "../src/application.js";
 import { buildDashboard } from "../src/dashboard.js";
-import { FakeClock, SequenceIds, tempRoot } from "./helpers.js";
-import { LocalStore } from "../src/storage.js";
-
-const now = new Date("2026-08-27T09:00:00.000Z");
-
-async function createApp(): Promise<{
-  app: TutorApplicationService;
-  course: Course;
-  store: LocalStore;
-  question: Question;
-  clock: FakeClock;
-}> {
-  const ids = new SequenceIds();
-  const store = new LocalStore(await tempRoot(), ids);
-  const clock = new FakeClock(now);
-  const app = new TutorApplicationService(store, clock, ids);
-  const created = await app.createCourse("Physics");
-  const course = await store.saveCourse(
-    {
-      ...created,
-      revision: created.revision + 1,
-      materials: [
-        {
-          id: "material-1",
-          path: "/courses/physics/notes.md",
-          addedAt: now.toISOString(),
-        },
-      ],
-      concepts: [{ id: "kinematics", name: "Kinematics" }],
-    },
-    created.revision,
-    "configure-course",
-  );
-  const question: Question = {
-    id: "question-1",
-    kind: "primary",
-    targetConceptId: "kinematics",
-    prompt: "How does acceleration affect velocity?",
-    sourceRefs: [
-      {
-        materialId: "material-1",
-        path: "/courses/physics/notes.md",
-        locator: "# acceleration",
-      },
-    ],
-  };
-
-  return { app, course, store, question, clock };
-}
+import { createApplicationFixture, now } from "./application/setup.js";
 
 test("assisted correctness cannot create unassisted mastery evidence", async () => {
-  const { app, course, store, question } = await createApp();
+  const { app, course, store, question } = await createApplicationFixture();
   const activity = await app.requestMode(course.id, "study");
   const asked = await app.recordQuestion(activity, question);
   const hinted = await app.recordHint(await app.requestHint(asked), 1);
@@ -77,7 +25,7 @@ test("assisted correctness cannot create unassisted mastery evidence", async () 
 });
 
 test("persists answered primary submissions with confidence", async () => {
-  const { app, course, store, question } = await createApp();
+  const { app, course, store, question } = await createApplicationFixture();
   await app.acceptSubmission(
     await app.recordQuestion(
       await app.requestMode(course.id, "study"),
@@ -92,7 +40,7 @@ test("persists answered primary submissions with confidence", async () => {
 });
 
 test("persists correction submissions without confidence or calibration readiness", async () => {
-  const { app, course, store, question } = await createApp();
+  const { app, course, store, question } = await createApplicationFixture();
   const submitted = await app.acceptSubmission(
     await app.recordQuestion(
       await app.requestMode(course.id, "study"),
@@ -116,7 +64,7 @@ test("persists correction submissions without confidence or calibration readines
 });
 
 test("records a branch retry instead of overwriting the original attempt", async () => {
-  const { app, course, store, question } = await createApp();
+  const { app, course, store, question } = await createApplicationFixture();
   const activity = await app.recordQuestion(
     await app.requestMode(course.id, "study"),
     question,
@@ -139,7 +87,7 @@ test("records a branch retry instead of overwriting the original attempt", async
 });
 
 test("persists incorrect unaided evidence before requiring correction", async () => {
-  const { app, course, store, question } = await createApp();
+  const { app, course, store, question } = await createApplicationFixture();
   const submitted = await app.acceptSubmission(
     await app.recordQuestion(
       await app.requestMode(course.id, "study"),
@@ -161,7 +109,7 @@ test("persists incorrect unaided evidence before requiring correction", async ()
 });
 
 test("restores an activity snapshot without losing global course evidence", async () => {
-  const { app, course, store, question } = await createApp();
+  const { app, course, store, question } = await createApplicationFixture();
   const activity = await app.acceptSubmission(
     await app.recordQuestion(
       await app.requestMode(course.id, "study"),
@@ -178,7 +126,7 @@ test("restores an activity snapshot without losing global course evidence", asyn
 });
 
 test("restores a valid exam-generating activity snapshot", async () => {
-  const { app, course } = await createApp();
+  const { app, course } = await createApplicationFixture();
   const activity = await app.requestMode(course.id, "exam");
 
   expect(app.restoreActivity(app.serializeActivity(activity))).toEqual(
@@ -187,7 +135,7 @@ test("restores a valid exam-generating activity snapshot", async () => {
 });
 
 test("restores an active exam independently of learning-history schema migration", async () => {
-  const { app, course } = await createApp();
+  const { app, course } = await createApplicationFixture();
   const activeExam = {
     schemaVersion: 1 as const,
     state: {
@@ -208,7 +156,7 @@ test("restores an active exam independently of learning-history schema migration
 });
 
 test("rejects adversarial activity snapshots before restoring them", async () => {
-  const { app } = await createApp();
+  const { app } = await createApplicationFixture();
 
   expect(() =>
     app.restoreActivity(
@@ -233,7 +181,7 @@ test("rejects adversarial activity snapshots before restoring them", async () =>
 });
 
 test("records a model-delivered reveal solution before requesting explanation", async () => {
-  const { app, course, store, question } = await createApp();
+  const { app, course, store, question } = await createApplicationFixture();
   const requested = await app.requestReveal(
     await app.recordQuestion(
       await app.requestMode(course.id, "study"),
@@ -258,7 +206,7 @@ test("records a model-delivered reveal solution before requesting explanation", 
 });
 
 test("projects unaided evidence, calibration, due tracks, and unresolved misconceptions", async () => {
-  const { app, course, store, question } = await createApp();
+  const { app, course, store, question } = await createApplicationFixture();
   const complete = async (
     confidence: number,
     correctness: "correct" | "incorrect",
@@ -337,7 +285,7 @@ test("projects unaided evidence, calibration, due tracks, and unresolved misconc
 });
 
 test("excludes ungradable attempts from calibration and unaided evidence", async () => {
-  const { course, question } = await createApp();
+  const { course, question } = await createApplicationFixture();
   const history = {
     schemaVersion: 2 as const,
     courseId: course.id,
@@ -394,7 +342,7 @@ test("excludes ungradable attempts from calibration and unaided evidence", async
 });
 
 test("excludes unanswered exam items from confidence calibration", async () => {
-  const { course, question } = await createApp();
+  const { course, question } = await createApplicationFixture();
   const answeredAttempt = {
     id: "attempt-answered",
     operationId: "operation-answered",
@@ -451,7 +399,7 @@ test("excludes unanswered exam items from confidence calibration", async () => {
 });
 
 test("selects an existing course as an idle activity", async () => {
-  const { app, course } = await createApp();
+  const { app, course } = await createApplicationFixture();
 
   await expect(
     app.selectCourse(course.id, { schemaVersion: 1, state: { tag: "idle" } }),
@@ -462,7 +410,7 @@ test("selects an existing course as an idle activity", async () => {
 });
 
 test("keeps extracted concepts pending until a learner approves them", async () => {
-  const { app, course } = await createApp();
+  const { app, course } = await createApplicationFixture();
   const sourceRefs = [
     {
       materialId: "material-1",
@@ -486,7 +434,7 @@ test("keeps extracted concepts pending until a learner approves them", async () 
 });
 
 test("rejects a concept proposal whose source is not configured", async () => {
-  const { app, course } = await createApp();
+  const { app, course } = await createApplicationFixture();
 
   await expect(
     app.proposeConcepts(course.id, [
@@ -502,7 +450,7 @@ test("rejects a concept proposal whose source is not configured", async () => {
 });
 
 test("records each manually omitted exam item before model grading", async () => {
-  const { app, course, store } = await createApp();
+  const { app, course, store } = await createApplicationFixture();
   const submitted = await app.submitExam(
     await activeExamWithDrafts(app, course.id, ["one"]),
   );
@@ -519,7 +467,7 @@ test("records each manually omitted exam item before model grading", async () =>
 });
 
 test("applies only one Again review per concept for multiple omitted items", async () => {
-  const { app, course, store } = await createApp();
+  const { app, course, store } = await createApplicationFixture();
   await app.submitExam(await activeExamWithDrafts(app, course.id, []));
 
   const track = (await store.getHistory(course.id)).concepts.kinematics!
@@ -529,7 +477,7 @@ test("applies only one Again review per concept for multiple omitted items", asy
 });
 
 test("grades only drafts after omissions are recorded", async () => {
-  const { app, course, store } = await createApp();
+  const { app, course, store } = await createApplicationFixture();
   const submitted = await app.submitExam(
     await activeExamWithDrafts(app, course.id, ["one"]),
   );
@@ -556,7 +504,7 @@ test("grades only drafts after omissions are recorded", async () => {
 });
 
 test("labels deadline omissions and still grades saved drafts later", async () => {
-  const { app, clock, course, store } = await createApp();
+  const { app, clock, course, store } = await createApplicationFixture();
   const timed = await activeExamWithDrafts(app, course.id, ["one"], {
     deadlineAt: "2026-08-27T10:00:00.000Z",
   });
@@ -578,7 +526,7 @@ test("labels deadline omissions and still grades saved drafts later", async () =
 });
 
 test("records a complete submitted exam as independently scheduled evidence", async () => {
-  const { app, course, store } = await createApp();
+  const { app, course, store } = await createApplicationFixture();
   const examQuestion = {
     id: "exam-q-1",
     kind: "exam" as const,
@@ -634,7 +582,7 @@ test("records a complete submitted exam as independently scheduled evidence", as
 });
 
 test("records all aggregate exam attempts with one operation ID", async () => {
-  const { app, course, store } = await createApp();
+  const { app, course, store } = await createApplicationFixture();
   const examQuestions = ["one", "two"].map((id) => ({
     id,
     kind: "exam" as const,
@@ -687,7 +635,7 @@ test("records all aggregate exam attempts with one operation ID", async () => {
 });
 
 test("rejects malformed restored exam drafts without recording evidence", async () => {
-  const { app, course, store } = await createApp();
+  const { app, course, store } = await createApplicationFixture();
   const activity = await app.requestMode(course.id, "exam");
   const malformed = {
     schemaVersion: 1,
@@ -719,7 +667,7 @@ test("rejects malformed restored exam drafts without recording evidence", async 
 });
 
 test("revalidates restored exam questions before recording evidence", async () => {
-  const { app, course, store } = await createApp();
+  const { app, course, store } = await createApplicationFixture();
   const presented = await app.recordExam(
     await app.requestMode(course.id, "exam"),
     {
@@ -781,7 +729,7 @@ test("revalidates restored exam questions before recording evidence", async () =
 });
 
 test("rejects aggregate grades that do not exactly cover submitted drafts", async () => {
-  const { app, course } = await createApp();
+  const { app, course } = await createApplicationFixture();
   const examQuestion = {
     id: "exam-q-1",
     kind: "exam" as const,
@@ -819,7 +767,7 @@ test("rejects aggregate grades that do not exactly cover submitted drafts", asyn
 });
 
 test("replaces stale pending concepts with a fresh extraction batch", async () => {
-  const { app, course } = await createApp();
+  const { app, course } = await createApplicationFixture();
   const sourceRefs = [
     {
       materialId: "material-1",
@@ -841,7 +789,7 @@ test("replaces stale pending concepts with a fresh extraction batch", async () =
 });
 
 test("rejects duplicate exam question IDs before activating an exam", async () => {
-  const { app, course, question } = await createApp();
+  const { app, course, question } = await createApplicationFixture();
   const examQuestion = { ...question, id: "duplicate", kind: "exam" as const };
 
   await expect(
@@ -857,7 +805,7 @@ test("rejects duplicate exam question IDs before activating an exam", async () =
 });
 
 test("rejects unsafe exam question IDs before activating an exam", async () => {
-  const { app, course, question } = await createApp();
+  const { app, course, question } = await createApplicationFixture();
 
   for (const id of ["", "line\nbreak", "__proto__"]) {
     await expect(
@@ -874,7 +822,7 @@ test("rejects unsafe exam question IDs before activating an exam", async () => {
 });
 
 test("rejects malformed exam submission states before they can be restored or graded", async () => {
-  const { app, course, store } = await createApp();
+  const { app, course, store } = await createApplicationFixture();
   const malformed = {
     schemaVersion: 1,
     state: {
@@ -917,7 +865,7 @@ test("rejects malformed exam submission states before they can be restored or gr
 });
 
 test("rejects multi-node concept parent cycles", async () => {
-  const { course } = await createApp();
+  const { course } = await createApplicationFixture();
   expect(() =>
     assertCourseInvariant({
       ...course,
@@ -990,7 +938,7 @@ function questionSource(course: Course) {
 }
 
 test("clears a pending concept parent only when explicitly requested", async () => {
-  const { app, course } = await createApp();
+  const { app, course } = await createApplicationFixture();
   const proposed = await app.proposeConcepts(course.id, [
     {
       id: "laws",
