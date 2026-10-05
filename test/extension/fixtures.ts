@@ -175,6 +175,19 @@ export function createExtensionDependencies(
     recordGrade: vi.fn(async () => idle),
     recordExplanation: vi.fn(async () => idle),
     recordExam: vi.fn(async () => activeExam),
+    saveExamDraft: vi.fn(async (activity, questionId, draft) => {
+      if (activity.state.tag !== "exam-active") return activity;
+      return {
+        ...activity,
+        state: {
+          ...activity.state,
+          exam: {
+            ...activity.state.exam,
+            drafts: { ...activity.state.exam.drafts, [questionId]: draft },
+          },
+        },
+      };
+    }),
     submitExam: vi.fn(async () => idle),
     proposeConcepts: vi.fn(async () => ({
       ...course,

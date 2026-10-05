@@ -257,25 +257,37 @@ test("saves an exam answer only after confidence and advances to the next item",
     answer: "First",
     confidence: 80,
   });
-  extension(
-    fake.api,
-    createExtensionDependencies({
-      recordExam: vi.fn(async (_current, presented) => ({
-        schemaVersion: 1,
-        state: { tag: "exam-active", courseId: course.id, exam: presented },
-      })),
-    }),
-  );
+  const dependencies = createExtensionDependencies({
+    recordExam: vi.fn(async (_current, presented) => ({
+      schemaVersion: 1,
+      state: { tag: "exam-active", courseId: course.id, exam: presented },
+    })),
+  });
+  extension(fake.api, dependencies);
   await fake.startSession();
 
   await fake.executeTool("tutor_present_exam", { items: twoExamItems });
   await fake.agentSettled();
+  await vi.waitFor(() => {
+    expect(dependencies.app.saveExamDraft).toHaveBeenCalledTimes(1);
+  });
 
   expect(fake.appendedEntries.at(-1)).toMatchObject({
     data: {
       state: { exam: { drafts: { "1": { answer: "First", confidence: 80 } } } },
     },
   });
+  expect(dependencies.app.saveExamDraft).toHaveBeenCalledWith(
+    expect.objectContaining({
+      state: expect.objectContaining({ tag: "exam-active" }),
+    }),
+    "1",
+    expect.objectContaining({
+      answer: "First",
+      confidence: 80,
+      submittedAt: now.toISOString(),
+    }),
+  );
   expect(
     fake.sentMessages
       .map(
@@ -526,7 +538,8 @@ test("registers every required tutor command and canonical tool", () => {
 
 test("retains bulk exam draft parsing only without a UI", async () => {
   const fake = createFakePi({ activity: activeExam, mode: "print" });
-  extension(fake.api, createExtensionDependencies());
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
   await fake.startSession();
 
   const result = await fake.dispatchInput("1. [confidence: 80]\nanswer");
@@ -542,6 +555,15 @@ test("retains bulk exam draft parsing only without a UI", async () => {
       },
     },
   });
+  expect(dependencies.app.saveExamDraft).toHaveBeenCalledWith(
+    activeExam,
+    "1",
+    expect.objectContaining({
+      answer: "answer",
+      confidence: 80,
+      submittedAt: now.toISOString(),
+    }),
+  );
 });
 
 test("submits an active exam locally when its deadline expires", async () => {

@@ -36,7 +36,6 @@ import {
   type ResponsePurpose,
 } from "../../src/response-ui.js";
 import { LocalStore, type Store } from "../../src/storage.js";
-import { transition } from "../../src/state-machine.js";
 import {
   conceptProposalText,
   setDeferredResponseWidget,
@@ -440,16 +439,12 @@ export default function examTutorExtension(
       }
 
       examController = { ...examController, deferredDraft: undefined };
-      const state = transition(activity.state, {
-        type: "examDraftAccepted",
-        questionId,
-        draft: {
-          answer: result.answer,
-          confidence: result.confidence,
-          submittedAt: clock.now().toISOString(),
-        },
+      const next = await app.saveExamDraft(activity, questionId, {
+        answer: result.answer,
+        confidence: result.confidence,
+        submittedAt: clock.now().toISOString(),
       });
-      persist({ schemaVersion: 1, state }, ctx);
+      persist(next, ctx);
       showExamItem(ctx);
     } catch (error) {
       openedExamQuestionId = undefined;
@@ -641,22 +636,23 @@ export default function examTutorExtension(
         return { action: "handled" };
       }
 
-      let state: ActivityState = activity.state;
+      let next = activity;
       const submittedAt = clock.now().toISOString();
       for (const [questionId, draft] of Object.entries(parsed.drafts)) {
-        state = transition(state, {
-          type: "examDraftAccepted",
-          questionId,
-          draft: { ...draft, submittedAt },
+        next = await app.saveExamDraft(next, questionId, {
+          ...draft,
+          submittedAt,
         });
       }
-      persist({ schemaVersion: 1, state }, ctx);
+      persist(next, ctx);
       if (ctx.hasUI) {
-        const complete =
-          state.tag === "exam-active" &&
-          state.exam.items.every(({ id }) =>
-            Object.hasOwn(state.exam.drafts, id),
+        let complete = false;
+        if (next.state.tag === "exam-active") {
+          const exam = next.state.exam;
+          complete = exam.items.every(({ id }) =>
+            Object.hasOwn(exam.drafts, id),
           );
+        }
         ctx.ui.notify(
           complete
             ? "All answers are saved. Amend any answer or run /exam submit."
