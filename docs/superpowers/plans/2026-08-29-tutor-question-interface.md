@@ -26,6 +26,17 @@
 - Preserve course separation, atomic persistence, source validation, canonical tool boundaries, exam feedback isolation, and all existing tutor state-machine guarantees.
 - Use TDD: every behavior change starts with a focused failing test; run the relevant suite before each commit and the full formatter/typecheck/test suite before the final commit.
 
+## Implementation Status
+
+**Audited ref:** `feat/tutor-question-interface` at `ed42531`.
+
+- [x] Tasks 1–3 — discriminated unanswered evidence, migration, omission scheduling, dashboard reporting, and submission persistence.
+- [~] Task 4 — the compact collector is implemented, but this branch initializes an edited answer's confidence at `50` instead of prefilling the prior confidence for explicit reconfirmation.
+- [ ] Tasks 5–7 — not implemented on this branch. Their settled-event controller, resume flow, per-item exam review, and interactive-first documentation were completed later on `main`.
+- [x] Current branch verification — `format:check`, `typecheck`, tests (113), and `git diff --check` passed; this does not make the remaining plan scope complete.
+
+The original checklist remains as the implementation record; this branch-status section is authoritative.
+
 ---
 
 ## File Structure
