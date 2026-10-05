@@ -36,7 +36,7 @@
 - [x] Task 7 — interactive-first documentation and no-UI fallback coverage.
 - [x] Current full verification — `format:check`, typecheck, 127 tests, package dry-run, clean-room `pi install`/`pi list`, and `git diff --check` passed on this ref.
 
-The checklist steps below preserve the original implementation sequence; this section records the audited state of the current project.
+The checklist steps below preserve the original implementation sequence; this section records the audited state of the current project. The former feature branch's partial status was superseded by this completed main-line implementation.
 
 ---
 
