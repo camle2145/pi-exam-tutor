@@ -609,9 +609,11 @@ export default function examTutorExtension(
     openedExamQuestionId = undefined;
   });
 
-  pi.on("agent_settled", async (_event, ctx) => {
-    await collectPendingResponse(ctx);
-    await collectExamResponse(ctx);
+  pi.on("agent_settled", (_event, ctx) => {
+    // A response can trigger the next model turn. Do not keep Pi's settled-event
+    // lifecycle open while the learner interacts with its panel.
+    void collectPendingResponse(ctx);
+    void collectExamResponse(ctx);
   });
 
   pi.on("input", async (event, ctx) => {

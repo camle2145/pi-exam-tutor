@@ -691,9 +691,14 @@ test("resumes a deferred unanswered exam response with prefilled reconfirmable c
   await fake.startSession();
 
   await fake.agentSettled();
+  await vi.waitFor(() => {
+    expect(fake.ui.custom).toHaveBeenCalledTimes(1);
+  });
   await fake.agentSettled();
 
-  expect(fake.ui.custom).toHaveBeenCalledTimes(3);
+  await vi.waitFor(() => {
+    expect(fake.ui.custom).toHaveBeenCalledTimes(3);
+  });
   expect(fake.appendedEntries.at(-1)).toMatchObject({
     data: {
       state: {
@@ -991,6 +996,45 @@ test("opens one response panel after the tutor turn settles", async () => {
   expect(fake.ui.custom).toHaveBeenCalledTimes(1);
 });
 
+test("settles before an interactive response panel is completed", async () => {
+  const acceptSubmission = vi.fn(async () => awaitingGrade);
+  const fake = createFakePi({ activity: awaitingAnswer });
+  let resolvePanel!: (result: unknown) => void;
+  fake.ui.custom.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolvePanel = resolve;
+      }),
+  );
+  extension(fake.api, createDependencies({ acceptSubmission }));
+  await fake.startSession();
+
+  const settled = fake.agentSettled();
+  await expect(
+    Promise.race([
+      settled.then(() => "settled"),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("pending"), 20),
+      ),
+    ]),
+  ).resolves.toBe("settled");
+
+  resolvePanel({
+    kind: "submitted",
+    answer: "Velocity changes.",
+    confidence: 70,
+  });
+  await vi.waitFor(() => {
+    expect(acceptSubmission).toHaveBeenCalledWith(awaitingAnswer, {
+      answer: "Velocity changes.",
+      confidence: 70,
+    });
+  });
+  expect(fake.sentMessages).toContainEqual(
+    expect.objectContaining({ options: { triggerTurn: true } }),
+  );
+});
+
 test("persists and sends a confirmed answer as a custom learner message", async () => {
   const acceptSubmission = vi.fn(async () => awaitingGrade);
   const dependencies = createDependencies({ acceptSubmission });
@@ -1005,9 +1049,11 @@ test("persists and sends a confirmed answer as a custom learner message", async 
 
   await fake.agentSettled();
 
-  expect(acceptSubmission).toHaveBeenCalledWith(awaitingAnswer, {
-    answer: "Velocity changes.",
-    confidence: 70,
+  await vi.waitFor(() => {
+    expect(acceptSubmission).toHaveBeenCalledWith(awaitingAnswer, {
+      answer: "Velocity changes.",
+      confidence: 70,
+    });
   });
   expect(fake.sentMessages).toContainEqual(
     expect.objectContaining({
