@@ -257,11 +257,15 @@ test("saves an exam answer only after confidence and advances to the next item",
     answer: "First",
     confidence: 80,
   });
+  let presentedActivity: SessionActivity;
   const dependencies = createExtensionDependencies({
-    recordExam: vi.fn(async (_current, presented) => ({
-      schemaVersion: 1,
-      state: { tag: "exam-active", courseId: course.id, exam: presented },
-    })),
+    recordExam: vi.fn(async (_current, presented) => {
+      presentedActivity = {
+        schemaVersion: 1,
+        state: { tag: "exam-active", courseId: course.id, exam: presented },
+      };
+      return presentedActivity;
+    }),
   });
   extension(fake.api, dependencies);
   await fake.startSession();
@@ -278,15 +282,13 @@ test("saves an exam answer only after confidence and advances to the next item",
     },
   });
   expect(dependencies.app.saveExamDraft).toHaveBeenCalledWith(
-    expect.objectContaining({
-      state: expect.objectContaining({ tag: "exam-active" }),
-    }),
+    presentedActivity,
     "1",
-    expect.objectContaining({
+    {
       answer: "First",
       confidence: 80,
       submittedAt: now.toISOString(),
-    }),
+    },
   );
   expect(
     fake.sentMessages
@@ -342,7 +344,8 @@ test("resumes a deferred unanswered exam response with prefilled reconfirmable c
           panel.handleInput("\r");
         }),
     );
-  extension(fake.api, createExtensionDependencies());
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
   await fake.startSession();
 
   await fake.agentSettled();
@@ -353,6 +356,11 @@ test("resumes a deferred unanswered exam response with prefilled reconfirmable c
 
   await vi.waitFor(() => {
     expect(fake.ui.custom).toHaveBeenCalledTimes(3);
+  });
+  expect(dependencies.app.saveExamDraft).toHaveBeenCalledWith(activeExam, "1", {
+    answer: "later",
+    confidence: 75,
+    submittedAt: now.toISOString(),
   });
   expect(fake.appendedEntries.at(-1)).toMatchObject({
     data: {
@@ -379,13 +387,19 @@ test("reopens a cancelled unanswered exam item without duplicate panels", async 
       answer: "Acceleration changes velocity.",
       confidence: 80,
     });
-  extension(fake.api, createExtensionDependencies());
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
   await fake.startSession();
 
   await fake.agentSettled();
   await fake.agentSettled();
   await fake.agentSettled();
 
+  expect(dependencies.app.saveExamDraft).toHaveBeenCalledWith(activeExam, "1", {
+    answer: "Acceleration changes velocity.",
+    confidence: 80,
+    submittedAt: now.toISOString(),
+  });
   expect(fake.ui.custom).toHaveBeenCalledTimes(2);
   expect(fake.appendedEntries.at(-1)).toMatchObject({
     data: {
