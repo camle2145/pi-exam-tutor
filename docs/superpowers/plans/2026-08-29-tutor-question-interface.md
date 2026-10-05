@@ -26,6 +26,18 @@
 - Preserve course separation, atomic persistence, source validation, canonical tool boundaries, exam feedback isolation, and all existing tutor state-machine guarantees.
 - Use TDD: every behavior change starts with a focused failing test; run the relevant suite before each commit and the full formatter/typecheck/test suite before the final commit.
 
+## Implementation Status
+
+**Audited ref:** `main` at `c8bbbe5`.
+
+- [x] Tasks 1–3 — explicit unanswered-exam evidence, migration, omission scheduling/reporting, and submission persistence.
+- [x] Task 4 — compact TUI/RPC response collector with deferral and confidence confirmation.
+- [x] Tasks 5–6 — settled-event response controller, deferred resume, per-item exam editing/review, and post-grade citations.
+- [x] Task 7 — interactive-first documentation and no-UI fallback coverage.
+- [x] Current full verification — `format:check`, typecheck, 127 tests, package dry-run, clean-room `pi install`/`pi list`, and `git diff --check` passed on this ref.
+
+The checklist steps below preserve the original implementation sequence; this section records the audited state of the current project.
+
 ---
 
 ## File Structure
