@@ -1,8 +1,8 @@
-import { isAbsolute, normalize } from "node:path";
 import { ActivityCodec } from "./application/activity-codec.js";
+import { CourseService } from "./application/course-service.js";
+import { ApplicationRuntime } from "./application/runtime.js";
 import type { Clock, IdGenerator } from "./clock.js";
 import {
-  assertCourseInvariant,
   assertQuestion,
   isAnsweredAttempt,
   isGrammarSafeExamQuestionId,
@@ -102,50 +102,38 @@ export interface TutorApplication {
 
 export class TutorApplicationService implements TutorApplication {
   private readonly codec: ActivityCodec = new ActivityCodec();
+  private readonly runtime: ApplicationRuntime;
+  private readonly courses: CourseService;
 
   constructor(
     private readonly store: Store,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly scheduler: Scheduler = defaultScheduler,
-  ) {}
+  ) {
+    this.runtime = new ApplicationRuntime(
+      store,
+      clock,
+      ids,
+      scheduler,
+      this.codec,
+    );
+    this.courses = new CourseService(this.runtime);
+  }
 
   async createCourse(name: string): Promise<Course> {
-    return this.store.createCourse(name, this.operationId());
+    return this.courses.createCourse(name);
   }
 
   async selectCourse(
     courseId: string,
     session: SessionActivity,
   ): Promise<SessionActivity> {
-    this.codec.assert(session);
-    await this.store.getCourse(courseId);
-    return activity({ tag: "idle", courseId });
+    return this.courses.selectCourse(courseId, session);
   }
 
   async addMaterial(courseId: string, absolutePath: string): Promise<Course> {
-    if (!isAbsolute(absolutePath) || normalize(absolutePath) !== absolutePath) {
-      throw new Error("Material path must be absolute and normalized");
-    }
-
-    const course = await this.store.getCourse(courseId);
-    if (course.materials.some(({ path }) => path === absolutePath)) {
-      throw new Error(`Material path is already configured: ${absolutePath}`);
-    }
-    const next: Course = {
-      ...course,
-      revision: course.revision + 1,
-      materials: [
-        ...course.materials,
-        {
-          id: this.ids.next("material"),
-          path: absolutePath,
-          addedAt: this.clock.now().toISOString(),
-        },
-      ],
-    };
-    assertCourseInvariant(next);
-    return this.store.saveCourse(next, course.revision, this.operationId());
+    return this.courses.addMaterial(courseId, absolutePath);
   }
 
   async requestMode(
@@ -564,104 +552,14 @@ export class TutorApplicationService implements TutorApplication {
     courseId: string,
     proposals: readonly CourseConceptProposal[],
   ): Promise<Course> {
-    if (proposals.length === 0) {
-      throw new Error("Must propose at least one concept");
-    }
-    for (const proposal of proposals) {
-      if (typeof proposal.id !== "string" || proposal.id.trim() === "") {
-        throw new Error("Each proposal must have a nonempty ID");
-      }
-      if (typeof proposal.name !== "string" || proposal.name.trim() === "") {
-        throw new Error("Each proposal must have a nonempty name");
-      }
-      if (
-        !Array.isArray(proposal.sourceRefs) ||
-        proposal.sourceRefs.length === 0
-      ) {
-        throw new Error(
-          "Each proposal must cite at least one configured material",
-        );
-      }
-    }
-
-    const course = await this.store.getCourse(courseId);
-
-    const allIds = new Set(course.concepts.map(({ id }) => id));
-    for (const proposal of proposals) {
-      if (allIds.has(proposal.id)) {
-        throw new Error(`Duplicate concept id: ${proposal.id}`);
-      }
-      allIds.add(proposal.id);
-    }
-
-    for (const proposal of proposals) {
-      if (proposal.parentId !== undefined && !allIds.has(proposal.parentId)) {
-        throw new Error(`Unknown parent concept: ${proposal.parentId}`);
-      }
-    }
-
-    for (const proposal of proposals) {
-      for (const sourceRef of proposal.sourceRefs) {
-        const material = course.materials.find(
-          ({ id }) => id === sourceRef.materialId,
-        );
-        if (material === undefined) {
-          throw new Error(`Unknown source material: ${sourceRef.materialId}`);
-        }
-        if (sourceRef.path !== material.path) {
-          throw new Error(
-            `Source path must match the configured material path: ${sourceRef.path}`,
-          );
-        }
-      }
-    }
-
-    const next: Course = {
-      ...course,
-      revision: course.revision + 1,
-      proposedConcepts: [...proposals],
-    };
-    assertCourseInvariant(next);
-    return this.store.saveCourse(next, course.revision, this.operationId());
+    return this.courses.proposeConcepts(courseId, proposals);
   }
 
   async approveConcepts(
     courseId: string,
     conceptIds: readonly string[],
   ): Promise<Course> {
-    const course = await this.store.getCourse(courseId);
-
-    if (conceptIds.length === 0) {
-      conceptIds = course.proposedConcepts.map(({ id }) => id);
-    }
-
-    const byId = new Map(course.proposedConcepts.map((c) => [c.id, c]));
-    for (const id of conceptIds) {
-      if (!byId.has(id)) {
-        throw new Error(`No pending proposal: ${id}`);
-      }
-    }
-
-    const approved: Course["concepts"] = conceptIds.map((id) => {
-      const proposal = byId.get(id)!;
-      return {
-        id: proposal.id,
-        name: proposal.name,
-        parentId: proposal.parentId,
-      };
-    });
-
-    const removedIds = new Set(conceptIds);
-    const next: Course = {
-      ...course,
-      revision: course.revision + 1,
-      concepts: [...course.concepts, ...approved],
-      proposedConcepts: course.proposedConcepts.filter(
-        ({ id }) => !removedIds.has(id),
-      ),
-    };
-    assertCourseInvariant(next);
-    return this.store.saveCourse(next, course.revision, this.operationId());
+    return this.courses.approveConcepts(courseId, conceptIds);
   }
 
   async editProposedConcept(
@@ -669,74 +567,14 @@ export class TutorApplicationService implements TutorApplication {
     conceptId: string,
     update: { name?: string; parentId?: string | null },
   ): Promise<Course> {
-    const course = await this.store.getCourse(courseId);
-
-    const byId = new Map(course.proposedConcepts.map((c) => [c.id, c]));
-    if (!byId.has(conceptId)) {
-      throw new Error(`No pending proposal: ${conceptId}`);
-    }
-
-    const merged: CourseConceptProposal = {
-      ...byId.get(conceptId)!,
-      ...(update.name !== undefined ? { name: update.name } : {}),
-      ...(update.parentId === undefined
-        ? {}
-        : update.parentId === null
-          ? { parentId: undefined }
-          : { parentId: update.parentId }),
-    };
-
-    const allIds = new Set([
-      ...course.concepts.map(({ id }) => id),
-      ...course.proposedConcepts.map(({ id }) => id),
-    ]);
-    if (
-      merged.parentId !== undefined &&
-      merged.parentId !== merged.id &&
-      !allIds.has(merged.parentId)
-    ) {
-      throw new Error(`Unknown parent concept: ${merged.parentId}`);
-    }
-
-    const next: Course = {
-      ...course,
-      revision: course.revision + 1,
-      proposedConcepts: course.proposedConcepts.map((c) =>
-        c.id === conceptId ? merged : c,
-      ),
-    };
-    assertCourseInvariant(next);
-    return this.store.saveCourse(next, course.revision, this.operationId());
+    return this.courses.editProposedConcept(courseId, conceptId, update);
   }
 
   async removeProposedConcept(
     courseId: string,
     conceptId: string,
   ): Promise<Course> {
-    const course = await this.store.getCourse(courseId);
-
-    const byId = new Map(course.proposedConcepts.map((c) => [c.id, c]));
-    if (!byId.has(conceptId)) {
-      throw new Error(`No pending proposal: ${conceptId}`);
-    }
-
-    for (const proposal of course.proposedConcepts) {
-      if (proposal.parentId === conceptId) {
-        throw new Error(
-          `Cannot remove concept that is a parent of: ${proposal.id}`,
-        );
-      }
-    }
-
-    const next: Course = {
-      ...course,
-      revision: course.revision + 1,
-      proposedConcepts: course.proposedConcepts.filter(
-        ({ id }) => id !== conceptId,
-      ),
-    };
-    assertCourseInvariant(next);
-    return this.store.saveCourse(next, course.revision, this.operationId());
+    return this.courses.removeProposedConcept(courseId, conceptId);
   }
 
   async recordExamGrades(
@@ -893,16 +731,11 @@ export class TutorApplicationService implements TutorApplication {
   }
 
   private async courseFor(current: SessionActivity): Promise<Course> {
-    this.codec.assert(current);
-    const courseId = current.state.courseId;
-    if (courseId === undefined) {
-      throw new Error("An activity must select a course");
-    }
-    return this.store.getCourse(courseId);
+    return this.runtime.courseFor(current);
   }
 
   private operationId(): string {
-    return this.ids.next("operation");
+    return this.runtime.operationId();
   }
 }
 
