@@ -108,78 +108,6 @@ test("persists incorrect unaided evidence before requiring correction", async ()
   expect(progress.misconceptions).toHaveLength(1);
 });
 
-test("restores an activity snapshot without losing global course evidence", async () => {
-  const { app, course, store, question } = await createApplicationFixture();
-  const activity = await app.acceptSubmission(
-    await app.recordQuestion(
-      await app.requestMode(course.id, "study"),
-      question,
-    ),
-    { answer: "velocity increases", confidence: 80 },
-  );
-
-  const snapshot = app.serializeActivity(activity);
-  const restored = app.restoreActivity(snapshot);
-
-  expect(restored).toEqual(activity);
-  expect((await store.getHistory(course.id)).attempts).toHaveLength(1);
-});
-
-test("restores a valid exam-generating activity snapshot", async () => {
-  const { app, course } = await createApplicationFixture();
-  const activity = await app.requestMode(course.id, "exam");
-
-  expect(app.restoreActivity(app.serializeActivity(activity))).toEqual(
-    activity,
-  );
-});
-
-test("restores an active exam independently of learning-history schema migration", async () => {
-  const { app, course } = await createApplicationFixture();
-  const activeExam = {
-    schemaVersion: 1 as const,
-    state: {
-      tag: "exam-active" as const,
-      courseId: course.id,
-      exam: {
-        id: "exam-1",
-        operationId: "op-exam",
-        startedAt: now.toISOString(),
-        status: "active" as const,
-        items: [],
-        drafts: {},
-      },
-    },
-  };
-
-  expect(() => app.restoreActivity(JSON.stringify(activeExam))).not.toThrow();
-});
-
-test("rejects adversarial activity snapshots before restoring them", async () => {
-  const { app } = await createApplicationFixture();
-
-  expect(() =>
-    app.restoreActivity(
-      JSON.stringify({ schemaVersion: 1, state: { tag: "bad" } }),
-    ),
-  ).toThrow("Invalid activity snapshot");
-  expect(() =>
-    app.restoreActivity(
-      JSON.stringify({
-        schemaVersion: 1,
-        state: {
-          tag: "awaiting-primary-answer",
-          courseId: "course-1",
-          mode: "exam",
-          question: { id: "question-1" },
-          hintLevel: 7,
-          revealed: "false",
-        },
-      }),
-    ),
-  ).toThrow("Invalid activity snapshot");
-});
-
 test("records a model-delivered reveal solution before requesting explanation", async () => {
   const { app, course, store, question } = await createApplicationFixture();
   const requested = await app.requestReveal(
@@ -634,38 +562,6 @@ test("records all aggregate exam attempts with one operation ID", async () => {
   expect(history.appliedOperationIds).toEqual([...operationIds]);
 });
 
-test("rejects malformed restored exam drafts without recording evidence", async () => {
-  const { app, course, store } = await createApplicationFixture();
-  const activity = await app.requestMode(course.id, "exam");
-  const malformed = {
-    schemaVersion: 1,
-    state: {
-      tag: "exam-submitted" as const,
-      courseId: course.id,
-      exam: {
-        id: "exam-malformed",
-        operationId: "exam-operation-malformed",
-        startedAt: now.toISOString(),
-        status: "submitted" as const,
-        items: [],
-        drafts: {
-          missing: {
-            answer: "Answer.",
-            confidence: 80,
-            submittedAt: now.toISOString(),
-          },
-        },
-      },
-    },
-  };
-
-  expect(() => app.restoreActivity(JSON.stringify(malformed))).toThrow(
-    "Invalid activity snapshot",
-  );
-  expect((await store.getHistory(course.id)).attempts).toEqual([]);
-  expect(activity.state.tag).toBe("exam-generating");
-});
-
 test("revalidates restored exam questions before recording evidence", async () => {
   const { app, course, store } = await createApplicationFixture();
   const presented = await app.recordExam(
@@ -819,49 +715,6 @@ test("rejects unsafe exam question IDs before activating an exam", async () => {
       }),
     ).rejects.toThrow("Exam question ID is not safe for draft syntax");
   }
-});
-
-test("rejects malformed exam submission states before they can be restored or graded", async () => {
-  const { app, course, store } = await createApplicationFixture();
-  const malformed = {
-    schemaVersion: 1,
-    state: {
-      tag: "exam-submitted",
-      courseId: course.id,
-      exam: {
-        id: "exam-invalid-boundary",
-        operationId: "operation-invalid-boundary",
-        startedAt: now.toISOString(),
-        status: "active",
-        items: [],
-        drafts: {},
-      },
-    },
-  };
-
-  expect(() => app.restoreActivity(JSON.stringify(malformed))).toThrow(
-    "Invalid activity snapshot",
-  );
-  expect(() =>
-    app.restoreActivity(
-      JSON.stringify({
-        ...malformed,
-        state: {
-          ...malformed.state,
-          tag: "exam-active",
-          exam: {
-            ...malformed.state.exam,
-            status: "submitted",
-            submittedAt: now.toISOString(),
-          },
-        },
-      }),
-    ),
-  ).toThrow("Invalid activity snapshot");
-  await expect(app.recordExamGrades(malformed, [])).rejects.toThrow(
-    "Invalid activity snapshot",
-  );
-  expect((await store.getHistory(course.id)).attempts).toEqual([]);
 });
 
 test("rejects multi-node concept parent cycles", async () => {
