@@ -5,10 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { TutorApplication } from "../../src/application.js";
 import type { SessionActivity, TutorMode } from "../../src/domain.js";
-import {
-  collectResponse,
-  type ResponsePurpose,
-} from "../../src/response-ui.js";
+import { collectResponse, type ResponsePurpose } from "./response-ui.js";
 import { learnerExplanation, learnerSubmission } from "./presentation.js";
 import type { SessionCoordinator } from "./runtime.js";
 

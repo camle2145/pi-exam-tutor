@@ -4,7 +4,7 @@ import {
   collectResponse,
   createConfidencePanel,
   type ResponseRequest,
-} from "../src/response-ui.js";
+} from "../../extensions/exam-tutor/response-ui.js";
 
 const gradedRequest: ResponseRequest = {
   purpose: "graded",

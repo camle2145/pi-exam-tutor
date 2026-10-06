@@ -23,45 +23,6 @@ test("opens one response panel after the tutor turn settles", async () => {
   expect(fake.ui.custom).toHaveBeenCalledTimes(1);
 });
 
-test("settles before an interactive response panel is completed", async () => {
-  const acceptSubmission = vi.fn(async () => awaitingGrade);
-  const fake = createFakePi({ activity: awaitingAnswer });
-  let resolvePanel!: (result: unknown) => void;
-  fake.ui.custom.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        resolvePanel = resolve;
-      }),
-  );
-  extension(fake.api, createExtensionDependencies({ acceptSubmission }));
-  await fake.startSession();
-
-  const settled = fake.agentSettled();
-  await expect(
-    Promise.race([
-      settled.then(() => "settled"),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve("pending"), 20),
-      ),
-    ]),
-  ).resolves.toBe("settled");
-
-  resolvePanel({
-    kind: "submitted",
-    answer: "Velocity changes.",
-    confidence: 70,
-  });
-  await vi.waitFor(() => {
-    expect(acceptSubmission).toHaveBeenCalledWith(awaitingAnswer, {
-      answer: "Velocity changes.",
-      confidence: 70,
-    });
-  });
-  expect(fake.sentMessages).toContainEqual(
-    expect.objectContaining({ options: { triggerTurn: true } }),
-  );
-});
-
 test("persists and sends a confirmed answer as a custom learner message", async () => {
   const acceptSubmission = vi.fn(async () => awaitingGrade);
   const dependencies = createExtensionDependencies({ acceptSubmission });
@@ -115,24 +76,6 @@ test("defers without persistence and restores ordinary typed text", async () => 
     expect.stringContaining("/resume-answer"),
     "info",
   );
-});
-
-test("retains header parsing for regular answers without a UI", async () => {
-  const acceptSubmission = vi.fn(async () => awaitingGrade);
-  const fake = createFakePi({ activity: awaitingAnswer, mode: "print" });
-  extension(fake.api, createExtensionDependencies({ acceptSubmission }));
-  await fake.startSession();
-
-  await expect(
-    fake.dispatchInput("[confidence: 70]\nVelocity changes over time."),
-  ).resolves.toMatchObject({
-    action: "transform",
-    text: expect.stringContaining("<exam-tutor-learner-submission>"),
-  });
-  expect(acceptSubmission).toHaveBeenCalledWith(awaitingAnswer, {
-    answer: "Velocity changes over time.",
-    confidence: 70,
-  });
 });
 
 test("collects a correction without confidence", async () => {

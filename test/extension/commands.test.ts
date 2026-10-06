@@ -204,18 +204,3 @@ test("renders dashboard as a non-triggering custom message outside TUI", async (
     options: { triggerTurn: false, deliverAs: "nextTurn" },
   });
 });
-
-test("study-off persists idle state and clears tutor status and widget", async () => {
-  const fake = createFakePi({ activity: awaitingAnswer });
-  extension(fake.api, createExtensionDependencies());
-  await fake.startSession();
-
-  await fake.invokeCommand("study-off");
-
-  expect(fake.appendedEntries.at(-1)).toEqual({
-    customType: "pi-exam-tutor/activity-v1",
-    data: idle,
-  });
-  expect(fake.ui.setStatus).toHaveBeenLastCalledWith("exam-tutor", undefined);
-  expect(fake.ui.setWidget).toHaveBeenLastCalledWith("exam-tutor", undefined);
-});

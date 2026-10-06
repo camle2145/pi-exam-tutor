@@ -16,7 +16,7 @@ import type {
   SessionActivity,
   SourceReference,
 } from "../../src/domain.js";
-import { conceptProposalText } from "../../src/ui.js";
+import { conceptProposalText } from "./ui.js";
 import {
   citation,
   citations,

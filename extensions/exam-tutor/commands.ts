@@ -9,16 +9,20 @@ import { buildDashboard as projectDashboard } from "../../src/dashboard.js";
 import type {
   Course,
   Dashboard,
+  LearningHistory,
   SessionActivity,
   TutorMode,
 } from "../../src/domain.js";
-import type { Store } from "../../src/storage.js";
-import { showDashboard } from "../../src/ui.js";
+import { showDashboard } from "./ui.js";
 import { createCourseController } from "./course-controller.js";
 
 export interface CommandDependencies {
   app: TutorApplication;
-  store: Store;
+  store: {
+    listCourses(): Promise<Course[]>;
+    getCourse(courseId: string): Promise<Course>;
+    getHistory(courseId: string): Promise<LearningHistory>;
+  };
   clock: Clock;
   getActivity(): SessionActivity;
   persist(next: SessionActivity, ctx: ExtensionContext): void;
@@ -29,7 +33,7 @@ export interface CommandDependencies {
   submitExamWithReview(ctx: ExtensionContext): Promise<void>;
   dashboardBuilder?: (
     course: Course,
-    history: Awaited<ReturnType<Store["getHistory"]>>,
+    history: LearningHistory,
     now: Date,
   ) => Dashboard;
 }

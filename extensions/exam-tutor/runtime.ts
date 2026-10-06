@@ -5,7 +5,7 @@ import type {
 import type { TutorApplication } from "../../src/application.js";
 import type { Clock } from "../../src/clock.js";
 import type { SessionActivity } from "../../src/domain.js";
-import { setDeferredResponseWidget, updateTutorStatus } from "../../src/ui.js";
+import { setDeferredResponseWidget, updateTutorStatus } from "./ui.js";
 
 export const ACTIVITY_ENTRY_TYPE = "pi-exam-tutor/activity-v1";
 

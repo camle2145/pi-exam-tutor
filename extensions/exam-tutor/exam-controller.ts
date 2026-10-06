@@ -9,7 +9,7 @@ import type { TutorApplication } from "../../src/application.js";
 import type { Clock } from "../../src/clock.js";
 import type { SessionActivity } from "../../src/domain.js";
 import { parseExamDraft } from "../../src/input.js";
-import { collectResponse } from "../../src/response-ui.js";
+import { collectResponse } from "./response-ui.js";
 import type { SessionCoordinator } from "./runtime.js";
 
 export interface ExamController {

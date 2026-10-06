@@ -5,7 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { TutorApplication } from "../../src/application.js";
 import type { Course, SessionActivity } from "../../src/domain.js";
-import { showConceptProposals } from "../../src/ui.js";
+import { showConceptProposals } from "./ui.js";
 
 export interface CourseControllerDependencies {
   app: TutorApplication;

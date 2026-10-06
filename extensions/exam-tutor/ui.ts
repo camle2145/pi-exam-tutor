@@ -9,7 +9,7 @@ import {
   Text,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
-import type { Course, Dashboard, SessionActivity } from "./domain.js";
+import type { Course, Dashboard, SessionActivity } from "../../src/domain.js";
 
 export const DASHBOARD_MESSAGE_TYPE = "pi-exam-tutor/dashboard-v1";
 export const CONCEPT_PROPOSALS_MESSAGE_TYPE =
