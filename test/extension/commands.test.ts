@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { splitCommand } from "../../extensions/exam-tutor/commands.js";
 import extension from "../../extensions/exam-tutor/index.js";
+import type { SessionActivity } from "../../src/domain.js";
 import {
   activeExam,
   activeExamWithAllDrafts,
@@ -139,6 +140,45 @@ test("sends actual-ID draft answers only after exam submission", async () => {
       }),
     }),
   );
+});
+
+test("study-off returns to the selected course through the application facade", async () => {
+  const fake = createFakePi({ activity: awaitingAnswer });
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("study-off");
+
+  expect(dependencies.app.selectCourse).toHaveBeenCalledWith(
+    course.id,
+    awaitingAnswer,
+  );
+  expect(fake.appendedEntries.at(-1)).toEqual({
+    customType: "pi-exam-tutor/activity-v1",
+    data: idle,
+  });
+  expect(fake.ui.setStatus).toHaveBeenLastCalledWith("exam-tutor", undefined);
+  expect(fake.ui.setWidget).toHaveBeenLastCalledWith("exam-tutor", undefined);
+});
+
+test("study-off preserves an idle session without a selected course", async () => {
+  const unselected: SessionActivity = {
+    schemaVersion: 1,
+    state: { tag: "idle" },
+  };
+  const fake = createFakePi({ activity: unselected });
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("study-off");
+
+  expect(dependencies.app.selectCourse).not.toHaveBeenCalled();
+  expect(fake.appendedEntries.at(-1)).toEqual({
+    customType: "pi-exam-tutor/activity-v1",
+    data: unselected,
+  });
 });
 
 test("resumes the matching deferred response with its draft", async () => {

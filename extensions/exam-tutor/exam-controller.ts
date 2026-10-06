@@ -199,13 +199,25 @@ export function createExamController(
       }
 
       state = { ...state, deferredDraft: undefined };
-      const next = await app.saveExamDraft(activity, questionId, {
+      const draft = {
         answer: result.answer,
         confidence: result.confidence,
         submittedAt: clock.now().toISOString(),
-      });
-      coordinator.persist(next, ctx);
-      showActiveItem(ctx);
+      };
+      let current = coordinator.activity();
+      while (
+        current.state.tag === "exam-active" &&
+        current.state.exam.id === activity.state.exam.id &&
+        current.state.exam.items.some(({ id }) => id === questionId)
+      ) {
+        const next = await app.saveExamDraft(current, questionId, draft);
+        if (coordinator.activity() === current) {
+          coordinator.persist(next, ctx);
+          showActiveItem(ctx);
+          return;
+        }
+        current = coordinator.activity();
+      }
     } catch (error) {
       openedQuestionId = undefined;
       notifyError(

@@ -96,6 +96,15 @@ export function createFakePi(options: FakePiOptions = {}) {
         await handler({ type: "session_start", reason: "startup" }, context);
       }
     },
+    async shutdownSession() {
+      const registered = handlers.get("session_shutdown") ?? [];
+      if (registered.length === 0) {
+        throw new Error("No session_shutdown handler registered");
+      }
+      for (const handler of registered) {
+        await handler({ type: "session_shutdown" }, context);
+      }
+    },
     async beforeAgentStart(systemPrompt = "base prompt") {
       const [handler] = handlers.get("before_agent_start") ?? [];
       return handler?.(

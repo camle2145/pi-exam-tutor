@@ -381,6 +381,76 @@ test("submits an active exam locally when its deadline expires", async () => {
   }
 });
 
+test("does not let a pending answer panel overwrite deadline submission", async () => {
+  vi.useFakeTimers();
+  try {
+    const deadlineAt = new Date(now.getTime() + 60_000).toISOString();
+    const timedExam: SessionActivity = {
+      schemaVersion: 1,
+      state: {
+        tag: "exam-active",
+        courseId: course.id,
+        exam: { ...exam, deadlineAt },
+      },
+    };
+    const submitted: SessionActivity = {
+      schemaVersion: 1,
+      state: {
+        tag: "exam-submitted",
+        courseId: course.id,
+        exam: {
+          ...exam,
+          deadlineAt,
+          submittedAt: deadlineAt,
+          status: "expired",
+        },
+      },
+    };
+    let resolvePanel!: (result: unknown) => void;
+    const fake = createFakePi({ activity: timedExam });
+    fake.ui.custom.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePanel = resolve;
+        }),
+    );
+    const submitExam = vi.fn(async () => submitted);
+    const dependencies = createExtensionDependencies({ submitExam });
+    extension(fake.api, dependencies);
+    await fake.startSession();
+    await fake.agentSettled();
+    expect(fake.ui.custom).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_001);
+    resolvePanel({
+      kind: "submitted",
+      answer: "Late answer",
+      confidence: 80,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(dependencies.app.saveExamDraft).not.toHaveBeenCalled();
+    expect(fake.appendedEntries.at(-1)).toEqual({
+      customType: "pi-exam-tutor/activity-v1",
+      data: submitted,
+    });
+
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(submitExam).toHaveBeenCalledTimes(1);
+    expect(fake.sentMessages).toHaveLength(1);
+    expect(fake.sentMessages[0]).toMatchObject({
+      message: {
+        content: expect.stringContaining(
+          "Call tutor_record_exam_grades exactly once",
+        ),
+      },
+      options: { triggerTurn: true },
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("rejects malformed bulk exam drafts only without a UI", async () => {
   const fake = createFakePi({ activity: activeExam, mode: "print" });
   extension(fake.api, createExtensionDependencies());

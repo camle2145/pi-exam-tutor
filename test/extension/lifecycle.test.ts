@@ -1,11 +1,15 @@
 import { expect, test, vi } from "vitest";
 import extension from "../../extensions/exam-tutor/index.js";
 import { registerLifecycle } from "../../extensions/exam-tutor/lifecycle.js";
+import type { SessionActivity } from "../../src/domain.js";
 import {
   awaitingAnswer,
   awaitingGrade,
+  course,
   createExtensionDependencies,
+  exam,
   idle,
+  now,
 } from "./fixtures.js";
 import { createFakePi } from "./fake-pi.js";
 
@@ -92,19 +96,34 @@ test("retains header parsing for regular answers without a UI", async () => {
   });
 });
 
-test("study-off persists idle state and clears tutor status and widget", async () => {
-  const fake = createFakePi({ activity: awaitingAnswer });
-  extension(fake.api, createExtensionDependencies());
-  await fake.startSession();
+test("session shutdown clears a pending exam deadline", async () => {
+  vi.useFakeTimers();
+  try {
+    const timedExam: SessionActivity = {
+      schemaVersion: 1,
+      state: {
+        tag: "exam-active",
+        courseId: course.id,
+        exam: {
+          ...exam,
+          deadlineAt: new Date(now.getTime() + 60_000).toISOString(),
+        },
+      },
+    };
+    const submitExam = vi.fn();
+    const fake = createFakePi({ activity: timedExam });
+    extension(fake.api, createExtensionDependencies({ submitExam }));
+    await fake.startSession();
 
-  await fake.invokeCommand("study-off");
+    await fake.shutdownSession();
+    await vi.advanceTimersByTimeAsync(60_001);
 
-  expect(fake.appendedEntries.at(-1)).toEqual({
-    customType: "pi-exam-tutor/activity-v1",
-    data: idle,
-  });
-  expect(fake.ui.setStatus).toHaveBeenLastCalledWith("exam-tutor", undefined);
-  expect(fake.ui.setWidget).toHaveBeenLastCalledWith("exam-tutor", undefined);
+    expect(submitExam).not.toHaveBeenCalled();
+    expect(fake.appendedEntries).toEqual([]);
+    expect(fake.sentMessages).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("settles before an interactive response panel is completed", async () => {

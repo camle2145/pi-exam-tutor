@@ -167,11 +167,14 @@ export function registerCommands(
   pi.registerCommand("study-off", {
     description: "Turn off tutor mode",
     handler: async (_args, ctx) => {
-      assertExamUnlocked(dependencies.getActivity());
-      dependencies.persist(
-        idleActivity(dependencies.getActivity().state.courseId),
-        ctx,
-      );
+      const current = dependencies.getActivity();
+      assertExamUnlocked(current);
+      const courseId = current.state.courseId;
+      const next =
+        courseId === undefined
+          ? current
+          : await dependencies.app.selectCourse(courseId, current);
+      dependencies.persist(next, ctx);
     },
   });
 }
@@ -182,13 +185,6 @@ function assertExamUnlocked(current: SessionActivity): void {
       "Finish the active exam with /exam submit or wait for its deadline",
     );
   }
-}
-
-function idleActivity(courseId?: string): SessionActivity {
-  return {
-    schemaVersion: 1,
-    state: { tag: "idle", ...(courseId === undefined ? {} : { courseId }) },
-  };
 }
 
 function notifyError(ctx: ExtensionContext, message: string): void {
