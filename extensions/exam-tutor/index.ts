@@ -3,7 +3,8 @@ import type { TutorApplication } from "../../src/application.js";
 import type { Clock } from "../../src/clock.js";
 import { createDefaultTutorDependencies } from "../../src/default-dependencies.js";
 import type { Course, Dashboard, LearningHistory } from "../../src/domain.js";
-import { registerCommands } from "./commands.js";
+import { registerCommands, splitCommand } from "./commands.js";
+import { createCourseController } from "./course-controller.js";
 import { createExamController } from "./exam-controller.js";
 import { registerLifecycle } from "./lifecycle.js";
 import { registerMessageRenderers } from "./renderers.js";
@@ -46,6 +47,16 @@ export default function examTutorExtension(
     dependencies.clock,
     aggregateExamSubmission,
   );
+  const courses = createCourseController(pi, {
+    app: dependencies.app,
+    listCourses: () => dependencies.store.listCourses(),
+    getCourse: (courseId) => dependencies.store.getCourse(courseId),
+    getActivity: coordinator.activity,
+    selectedCourseId: coordinator.selectedCourseId,
+    persist: coordinator.persist,
+    triggerTurn: coordinator.triggerTurn,
+    splitCommand,
+  });
 
   registerLifecycle(pi, coordinator, responses, exams, dependencies);
   registerCommands(pi, {
@@ -60,6 +71,7 @@ export default function examTutorExtension(
     editExamAnswer: exams.edit,
     submitExamWithReview: exams.submitWithReview,
     dashboardBuilder: dependencies.buildDashboard,
+    courses,
   });
   registerMessageRenderers(pi);
   registerTools(pi, {

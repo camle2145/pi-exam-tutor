@@ -13,8 +13,8 @@ import type {
   SessionActivity,
   TutorMode,
 } from "../../src/domain.js";
+import type { CourseController } from "./course-controller.js";
 import { showDashboard } from "./ui.js";
-import { createCourseController } from "./course-controller.js";
 
 export interface CommandDependencies {
   app: TutorApplication;
@@ -36,6 +36,7 @@ export interface CommandDependencies {
     history: LearningHistory,
     now: Date,
   ) => Dashboard;
+  courses: CourseController;
 }
 
 export function splitCommand(args: string): { action: string; value: string } {
@@ -48,16 +49,6 @@ export function registerCommands(
   dependencies: CommandDependencies,
 ): void {
   const dashboardBuilder = dependencies.dashboardBuilder ?? projectDashboard;
-  const courseController = createCourseController(pi, {
-    app: dependencies.app,
-    listCourses: () => dependencies.store.listCourses(),
-    getCourse: (courseId) => dependencies.store.getCourse(courseId),
-    getActivity: dependencies.getActivity,
-    selectedCourseId: dependencies.selectedCourseId,
-    persist: dependencies.persist,
-    triggerTurn: dependencies.triggerTurn,
-    splitCommand,
-  });
 
   const requestMode = async (
     mode: TutorMode,
@@ -85,7 +76,7 @@ export function registerCommands(
     handler: async (args, ctx) => {
       assertExamUnlocked(dependencies.getActivity());
       const { action, value } = splitCommand(args);
-      await courseController.handle(action, value, ctx);
+      await dependencies.courses.handle(action, value, ctx);
     },
   });
   pi.registerCommand("study", {
