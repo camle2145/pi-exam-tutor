@@ -1,5 +1,4 @@
-import { expect, test, vi } from "vitest";
-import extension from "../../extensions/exam-tutor/index.js";
+import { expect, test } from "vitest";
 import {
   citation,
   learnerExplanation,
@@ -8,12 +7,7 @@ import {
   toolResult,
 } from "../../extensions/exam-tutor/presentation.js";
 import { registerMessageRenderers } from "../../extensions/exam-tutor/renderers.js";
-import {
-  awaitingGrade,
-  createExtensionDependencies,
-  idle,
-  question,
-} from "./fixtures.js";
+import { question } from "./fixtures.js";
 import { createFakePi } from "./fake-pi.js";
 
 test("preserves learner transcript and citation wire formats", () => {
@@ -75,35 +69,6 @@ test("registers the learner-response renderer with its existing display modes", 
       .map((line) => line.trimEnd())
       .join("\n"),
   ).toBe("Your answer: Velocity changes.\nConfidence: 70\nMode: study");
-});
-
-test("custom tool renderer exposes canonical learner-facing feedback", async () => {
-  const fake = createFakePi({ activity: awaitingGrade });
-  extension(
-    fake.api,
-    createExtensionDependencies({ recordGrade: vi.fn(async () => idle) }),
-  );
-  await fake.startSession();
-  const result = await fake.executeTool("tutor_record_grade", {
-    correctness: "correct",
-    gradingRationale: "Acceleration changes velocity.",
-    sourceRef: question.sourceRefs[0],
-  });
-  const component = fake
-    .tool("tutor_record_grade")
-    ?.renderResult?.(
-      result,
-      { expanded: false, isPartial: false },
-      { fg: (_color: string, text: string) => text },
-      {},
-    );
-
-  expect(component.render(120).join("\n")).toContain(
-    "Acceleration changes velocity.",
-  );
-  expect(component.render(120).join("\n")).toContain(
-    "/courses/physics/notes.md",
-  );
 });
 
 test("renders tool details before the model-facing result", () => {

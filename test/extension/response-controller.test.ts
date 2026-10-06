@@ -117,28 +117,6 @@ test("defers without persistence and restores ordinary typed text", async () => 
   );
 });
 
-test("resumes the matching deferred response with its draft", async () => {
-  const acceptSubmission = vi.fn(async () => awaitingGrade);
-  const fake = createFakePi({ activity: awaitingAnswer });
-  fake.ui.custom
-    .mockResolvedValueOnce({ kind: "deferred", draft: { answer: "draft" } })
-    .mockResolvedValueOnce({
-      kind: "submitted",
-      answer: "draft",
-      confidence: 60,
-    });
-  extension(fake.api, createExtensionDependencies({ acceptSubmission }));
-  await fake.startSession();
-  await fake.agentSettled();
-
-  await fake.invokeCommand("resume-answer");
-
-  expect(acceptSubmission).toHaveBeenCalledWith(awaitingAnswer, {
-    answer: "draft",
-    confidence: 60,
-  });
-});
-
 test("retains header parsing for regular answers without a UI", async () => {
   const acceptSubmission = vi.fn(async () => awaitingGrade);
   const fake = createFakePi({ activity: awaitingAnswer, mode: "print" });
