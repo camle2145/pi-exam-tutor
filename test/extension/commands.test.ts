@@ -6,7 +6,6 @@ import {
   activeExamWithAllDrafts,
   awaitingAnswer,
   awaitingGrade,
-  conceptProposal,
   course,
   createExtensionDependencies,
   idle,
@@ -49,19 +48,14 @@ test("requests cited concept extraction after adding a material", async () => {
   );
 });
 
-test("keeps proposed concepts pending until an explicit approve command", async () => {
+test("approves proposed concepts only through an explicit course command", async () => {
   const fake = createFakePi({ activity: idle });
   const dependencies = createExtensionDependencies();
   extension(fake.api, dependencies);
   await fake.startSession();
 
-  await fake.executeTool("tutor_propose_concepts", {
-    proposals: [conceptProposal],
-  });
-  expect(dependencies.app.proposeConcepts).toHaveBeenCalledWith(course.id, [
-    conceptProposal,
-  ]);
   await fake.invokeCommand("course", "concepts approve newton-laws");
+
   expect(dependencies.app.approveConcepts).toHaveBeenCalledWith(course.id, [
     "newton-laws",
   ]);

@@ -4,7 +4,9 @@ import extension from "../../extensions/exam-tutor/index.js";
 import type { SessionActivity } from "../../src/domain.js";
 import {
   activeExam,
+  awaitingAnswer,
   awaitingGrade,
+  conceptProposal,
   course,
   createExtensionDependencies,
   exam,
@@ -17,6 +19,70 @@ import { createFakePi } from "./fake-pi.js";
 
 test("exports the Pi tool registrar", () => {
   expect(registerTools).toBeTypeOf("function");
+});
+
+test("records question, transfer, hint, solution, and explanation tool calls", async () => {
+  const recordQuestion = vi.fn(async () => awaitingAnswer);
+  const recordHint = vi.fn(async () => awaitingAnswer);
+  const recordSolution = vi.fn(async () => awaitingAnswer);
+  const recordExplanation = vi.fn(async () => awaitingAnswer);
+  const fake = createFakePi({ activity: awaitingAnswer });
+  const dependencies = createExtensionDependencies({
+    recordQuestion,
+    recordHint,
+    recordSolution,
+    recordExplanation,
+  });
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.executeTool("tutor_present_question", { question });
+  await fake.executeTool("tutor_present_transfer", {
+    question: { ...question, id: "transfer-1", kind: "transfer" },
+  });
+  await fake.executeTool("tutor_present_hint", {
+    level: 1,
+    hint: "Consider the change over time.",
+    sourceRef: question.sourceRefs[0],
+  });
+  await fake.executeTool("tutor_present_solution", {
+    solution: "Acceleration changes velocity.",
+    sourceRef: question.sourceRefs[0],
+  });
+  await fake.executeTool("tutor_record_explanation", {
+    explanation: "A force produces acceleration.",
+  });
+
+  expect(recordQuestion).toHaveBeenCalledWith(awaitingAnswer, question);
+  expect(recordQuestion).toHaveBeenCalledWith(awaitingAnswer, {
+    ...question,
+    id: "transfer-1",
+    kind: "transfer",
+  });
+  expect(recordHint).toHaveBeenCalledWith(awaitingAnswer, 1);
+  expect(recordSolution).toHaveBeenCalledWith(awaitingAnswer);
+  expect(recordExplanation).toHaveBeenCalledWith(
+    awaitingAnswer,
+    "A force produces acceleration.",
+  );
+});
+
+test("records source-cited concept proposals through the canonical tool", async () => {
+  const proposeConcepts = vi.fn(async () => ({
+    ...course,
+    proposedConcepts: [conceptProposal],
+  }));
+  const fake = createFakePi({ activity: idle });
+  const dependencies = createExtensionDependencies({ proposeConcepts });
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  const result = await fake.executeTool("tutor_propose_concepts", {
+    proposals: [conceptProposal],
+  });
+
+  expect(proposeConcepts).toHaveBeenCalledWith(course.id, [conceptProposal]);
+  expect(result.details.display).toContain("Newton's laws");
 });
 
 test("records all aggregate exam grades only from the canonical tool", async () => {
