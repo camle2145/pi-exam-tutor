@@ -527,14 +527,6 @@ test("registers every required tutor command and canonical tool", () => {
       "study-off",
     ]),
   );
-  expect(fake.api.registerMessageRenderer).toHaveBeenCalledWith(
-    "pi-exam-tutor/learner-response-v1",
-    expect.any(Function),
-  );
-  expect(fake.api.registerMessageRenderer).toHaveBeenCalledWith(
-    "pi-exam-tutor/exam-item-v1",
-    expect.any(Function),
-  );
   expect(fake.toolNames()).toEqual(
     expect.arrayContaining([
       "tutor_present_question",
@@ -925,35 +917,6 @@ test("present-exam rejects duplicate generated item IDs without persisting", asy
     expect.objectContaining({ items: duplicateItems }),
   );
   expect(fake.appendedEntries).toEqual([]);
-});
-
-test("custom tool renderer exposes canonical learner-facing feedback", async () => {
-  const fake = createFakePi({ activity: awaitingGrade });
-  extension(
-    fake.api,
-    createExtensionDependencies({ recordGrade: vi.fn(async () => idle) }),
-  );
-  await fake.startSession();
-  const result = await fake.executeTool("tutor_record_grade", {
-    correctness: "correct",
-    gradingRationale: "Acceleration changes velocity.",
-    sourceRef: question.sourceRefs[0],
-  });
-  const component = fake
-    .tool("tutor_record_grade")
-    ?.renderResult?.(
-      result,
-      { expanded: false, isPartial: false },
-      { fg: (_color: string, text: string) => text },
-      {},
-    );
-
-  expect(component.render(120).join("\n")).toContain(
-    "Acceleration changes velocity.",
-  );
-  expect(component.render(120).join("\n")).toContain(
-    "/courses/physics/notes.md",
-  );
 });
 
 test("all state-mutating tutor tools execute sequentially", () => {

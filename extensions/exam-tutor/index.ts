@@ -43,6 +43,15 @@ import {
   showDashboard,
   updateTutorStatus,
 } from "../../src/ui.js";
+import {
+  citation,
+  citations,
+  learnerExplanation,
+  learnerSubmission,
+  renderToolResult,
+  toolResult,
+} from "./presentation.js";
+import { registerMessageRenderers } from "./renderers.js";
 
 export const ACTIVITY_ENTRY_TYPE = "pi-exam-tutor/activity-v1";
 
@@ -86,10 +95,6 @@ const examGradeSchema = Type.Object({
   gradingRationale: Type.String(),
   misconception: Type.Optional(Type.String()),
 });
-type ToolDisplayDetails = {
-  display: string;
-};
-
 type PendingResponse = {
   purpose: ResponsePurpose;
   activityFingerprint: string;
@@ -100,12 +105,6 @@ type ResponseControllerState = {
   panelOpen: boolean;
   deferred?: PendingResponse;
   openedFingerprint?: string;
-};
-
-type LearnerResponseDetails = {
-  answer: string;
-  confidence?: number;
-  mode: Exclude<TutorMode, "exam">;
 };
 
 interface ExamControllerState {
@@ -787,41 +786,6 @@ function activityFingerprint(current: SessionActivity): string {
   ].join(":");
 }
 
-function registerMessageRenderers(pi: ExtensionAPI): void {
-  pi.registerMessageRenderer<LearnerResponseDetails>(
-    "pi-exam-tutor/learner-response-v1",
-    (message, options, theme) => {
-      const details = message.details ?? { answer: "", mode: "study" };
-      const confidence =
-        details.confidence === undefined
-          ? ""
-          : ` · confidence ${details.confidence}`;
-      const display = options.expanded
-        ? [
-            `Your answer: ${details.answer}`,
-            ...(details.confidence === undefined
-              ? []
-              : [`Confidence: ${details.confidence}`]),
-            `Mode: ${details.mode}`,
-          ].join("\n")
-        : `Your answer${confidence}`;
-      return new Text(theme.fg("toolOutput", display), 0, 0);
-    },
-  );
-  pi.registerMessageRenderer<{ prompt?: string; progress?: string }>(
-    "pi-exam-tutor/exam-item-v1",
-    (message, _options, theme) => {
-      const details = message.details ?? {};
-      const content =
-        typeof message.content === "string" ? message.content : "Exam item";
-      const display = [details.progress, details.prompt ?? content]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-      return new Text(theme.fg("toolOutput", display), 0, 0);
-    },
-  );
-}
-
 interface CommandRuntime {
   app: TutorApplication;
   store: Store;
@@ -1421,34 +1385,6 @@ async function handleConceptCommand(
   );
 }
 
-function renderToolResult(
-  result: {
-    details?: ToolDisplayDetails;
-    content: Array<{ type: string; text?: string }>;
-  },
-  _options: unknown,
-  theme: { fg(color: string, text: string): string },
-): Text {
-  const display =
-    result.details?.display ??
-    result.content.find(({ type }) => type === "text")?.text ??
-    "";
-  return new Text(theme.fg("toolOutput", display), 0, 0);
-}
-
-function toolResult(
-  display: string,
-  modelResult: string,
-): {
-  content: Array<{ type: "text"; text: string }>;
-  details: ToolDisplayDetails;
-} {
-  return {
-    content: [{ type: "text", text: modelResult }],
-    details: { display },
-  };
-}
-
 function assertCurrentCitation(
   state: ActivityState,
   sourceRef: SourceReference,
@@ -1479,32 +1415,6 @@ function questionForState(state: ActivityState): Question | undefined {
     default:
       return undefined;
   }
-}
-
-function citations(sourceRefs: readonly SourceReference[]): string {
-  return sourceRefs.map(citation).join("; ");
-}
-
-function citation(sourceRef: SourceReference): string {
-  return `${sourceRef.path} (${sourceRef.locator})`;
-}
-
-function learnerSubmission(answer: string, confidence?: number): string {
-  return [
-    "<exam-tutor-learner-submission>",
-    ...(confidence === undefined ? [] : [`confidence: ${confidence}`]),
-    "answer:",
-    answer,
-    "</exam-tutor-learner-submission>",
-  ].join("\n");
-}
-
-function learnerExplanation(explanation: string): string {
-  return [
-    "<exam-tutor-learner-explanation>",
-    explanation,
-    "</exam-tutor-learner-explanation>",
-  ].join("\n");
 }
 
 function idleActivity(courseId?: string): SessionActivity {
