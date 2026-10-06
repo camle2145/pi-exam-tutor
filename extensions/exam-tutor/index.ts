@@ -30,18 +30,13 @@ import type {
   TutorMode,
 } from "../../src/domain.js";
 import { parseAnswer, parseExamDraft } from "../../src/input.js";
+import { collectResponse } from "../../src/response-ui.js";
 import { buildTutorPrompt } from "../../src/prompt.js";
-import {
-  collectResponse,
-  type ResponsePurpose,
-} from "../../src/response-ui.js";
 import { LocalStore, type Store } from "../../src/storage.js";
 import {
   conceptProposalText,
-  setDeferredResponseWidget,
   showConceptProposals,
   showDashboard,
-  updateTutorStatus,
 } from "../../src/ui.js";
 import {
   citation,
@@ -52,8 +47,10 @@ import {
   toolResult,
 } from "./presentation.js";
 import { registerMessageRenderers } from "./renderers.js";
+import { createResponseController } from "./response-controller.js";
+import { createSessionCoordinator } from "./runtime.js";
 
-export const ACTIVITY_ENTRY_TYPE = "pi-exam-tutor/activity-v1";
+export { ACTIVITY_ENTRY_TYPE } from "./runtime.js";
 
 export interface ExamTutorAdapterDependencies {
   app: TutorApplication;
@@ -95,18 +92,6 @@ const examGradeSchema = Type.Object({
   gradingRationale: Type.String(),
   misconception: Type.Optional(Type.String()),
 });
-type PendingResponse = {
-  purpose: ResponsePurpose;
-  activityFingerprint: string;
-  draft: { answer: string; confidence?: number };
-};
-
-type ResponseControllerState = {
-  panelOpen: boolean;
-  deferred?: PendingResponse;
-  openedFingerprint?: string;
-};
-
 interface ExamControllerState {
   activeQuestionId?: string;
   deferredDraft?: {
@@ -164,66 +149,9 @@ export default function examTutorExtension(
   const dependencies = suppliedDependencies ?? defaultDependencies();
   const { app, store, clock } = dependencies;
   const dashboardBuilder = dependencies.buildDashboard ?? projectDashboard;
-  let activity: SessionActivity = idleActivity();
-  let deadlineTimer: NodeJS.Timeout | undefined;
-  let responseController: ResponseControllerState = { panelOpen: false };
   let examController: ExamControllerState = {};
   let examPanelOpen = false;
   let openedExamQuestionId: string | undefined;
-
-  const triggerTurn = (instruction: string): void => {
-    pi.sendMessage(
-      {
-        customType: "pi-exam-tutor/turn-v1",
-        content: instruction,
-        display: false,
-      },
-      { triggerTurn: true },
-    );
-  };
-
-  const scheduleDeadline = (
-    next: SessionActivity,
-    ctx: ExtensionContext,
-  ): void => {
-    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-    deadlineTimer = undefined;
-    if (
-      next.state.tag !== "exam-active" ||
-      next.state.exam.deadlineAt === undefined
-    ) {
-      return;
-    }
-
-    const examId = next.state.exam.id;
-    const delay = Math.max(
-      0,
-      new Date(next.state.exam.deadlineAt).getTime() -
-        clock.now().getTime() +
-        1,
-    );
-    deadlineTimer = setTimeout(async () => {
-      if (
-        activity.state.tag !== "exam-active" ||
-        activity.state.exam.id !== examId
-      ) {
-        return;
-      }
-      try {
-        const submitted = await app.submitExam(activity);
-        persist(submitted, ctx);
-        triggerTurn(aggregateExamSubmission(submitted));
-      } catch (error) {
-        notifyError(
-          ctx,
-          error instanceof Error
-            ? error.message
-            : "Exam deadline submission failed",
-        );
-      }
-    }, delay);
-    deadlineTimer.unref();
-  };
 
   const syncExamController = (next: SessionActivity): void => {
     if (next.state.tag !== "exam-active") {
@@ -249,101 +177,18 @@ export default function examTutorExtension(
     };
   };
 
-  const persist = (next: SessionActivity, ctx: ExtensionContext): void => {
-    activity = next;
-    syncExamController(next);
-    responseController.deferred = undefined;
-    responseController.openedFingerprint = undefined;
-    pi.appendEntry(ACTIVITY_ENTRY_TYPE, next);
-    updateTutorStatus(ctx, next);
-    scheduleDeadline(next, ctx);
-  };
-
-  const collectPendingResponse = async (
-    ctx: ExtensionContext,
-    draft?: PendingResponse["draft"],
-  ): Promise<void> => {
-    const details = responseDetails(activity);
-    if (details === undefined) return;
-    const fingerprint = activityFingerprint(activity);
-    if (
-      responseController.panelOpen ||
-      responseController.deferred !== undefined ||
-      responseController.openedFingerprint === fingerprint
-    ) {
-      return;
-    }
-
-    responseController.panelOpen = true;
-    responseController.openedFingerprint = fingerprint;
-    try {
-      const result = await collectResponse(ctx, {
-        purpose: details.purpose,
-        requiresConfidence: details.requiresConfidence,
-        ...(draft === undefined
-          ? {}
-          : { answer: draft.answer, confidence: draft.confidence }),
-      });
-      if (result.kind === "deferred") {
-        responseController.deferred = {
-          purpose: details.purpose,
-          activityFingerprint: fingerprint,
-          draft: result.draft,
-        };
-        updateTutorStatus(ctx, activity);
-        setDeferredResponseWidget(ctx, true);
-        return;
-      }
-      if (result.kind === "cancelled") return;
-
-      if (details.purpose === "explanation") {
-        const next = await app.recordExplanation(activity, result.answer);
-        persist(next, ctx);
-        pi.sendMessage(
-          {
-            customType: "pi-exam-tutor/learner-response-v1",
-            content: learnerExplanation(result.answer),
-            display: true,
-            details: { answer: result.answer, mode: details.mode },
-          },
-          { triggerTurn: true },
-        );
-        return;
-      }
-
-      const submission =
-        result.confidence === undefined
-          ? { answer: result.answer }
-          : { answer: result.answer, confidence: result.confidence };
-      const next = await app.acceptSubmission(activity, submission);
-      persist(next, ctx);
-      pi.sendMessage(
-        {
-          customType: "pi-exam-tutor/learner-response-v1",
-          content: learnerSubmission(result.answer, result.confidence),
-          display: true,
-          details: {
-            answer: result.answer,
-            ...(result.confidence === undefined
-              ? {}
-              : { confidence: result.confidence }),
-            mode: details.mode,
-          },
-        },
-        { triggerTurn: true },
-      );
-    } catch (error) {
-      responseController.openedFingerprint = undefined;
-      notifyError(
-        ctx,
-        error instanceof Error ? error.message : "Response could not be saved",
-      );
-    } finally {
-      responseController.panelOpen = false;
-    }
-  };
+  const coordinator = createSessionCoordinator(
+    pi,
+    { app, clock },
+    {
+      onActivityChanged: syncExamController,
+      aggregateExamSubmission,
+    },
+  );
+  const responses = createResponseController(pi, coordinator, app);
 
   const showExamItem = (ctx: ExtensionContext): void => {
+    const activity = coordinator.activity();
     if (activity.state.tag !== "exam-active") return;
     const { exam } = activity.state;
     const activeQuestionId = examController.activeQuestionId;
@@ -380,6 +225,7 @@ export default function examTutorExtension(
     questionId = examController.activeQuestionId,
     edit?: { answer: string; confidence: number },
   ): Promise<void> => {
+    const activity = coordinator.activity();
     if (activity.state.tag !== "exam-active" || questionId === undefined)
       return;
     const item = activity.state.exam.items.find(({ id }) => id === questionId);
@@ -422,7 +268,7 @@ export default function examTutorExtension(
               previousConfidence: persistedDraft.confidence,
             },
           };
-          updateTutorStatus(ctx, activity);
+          coordinator.setDeferredResponse(ctx, responses.hasDeferredResponse());
         } else {
           examController = {
             ...examController,
@@ -443,7 +289,7 @@ export default function examTutorExtension(
         confidence: result.confidence,
         submittedAt: clock.now().toISOString(),
       });
-      persist(next, ctx);
+      coordinator.persist(next, ctx);
       showExamItem(ctx);
     } catch (error) {
       openedExamQuestionId = undefined;
@@ -462,6 +308,7 @@ export default function examTutorExtension(
     ctx: ExtensionContext,
     rawQuestionId: string,
   ): Promise<void> => {
+    const activity = coordinator.activity();
     if (activity.state.tag !== "exam-active") {
       notifyError(ctx, "There is no active exam to edit");
       return;
@@ -488,6 +335,7 @@ export default function examTutorExtension(
   };
 
   const showExamReview = async (ctx: ExtensionContext): Promise<boolean> => {
+    const activity = coordinator.activity();
     if (activity.state.tag !== "exam-active") return false;
     const { exam } = activity.state;
     if (!ctx.hasUI) return false;
@@ -543,61 +391,22 @@ export default function examTutorExtension(
       examController = { ...examController, pendingEdit: undefined };
     }
     if (!(await showExamReview(ctx))) return;
-    const next = await app.submitExam(activity);
-    persist(next, ctx);
-    triggerTurn(aggregateExamSubmission(next));
-  };
-
-  const resumeAnswer = async (ctx: ExtensionContext): Promise<void> => {
-    const pending = responseController.deferred;
-    if (
-      pending === undefined ||
-      responseDetails(activity)?.purpose !== pending.purpose ||
-      activityFingerprint(activity) !== pending.activityFingerprint
-    ) {
-      if (ctx.hasUI) ctx.ui.notify("No response is pending", "info");
-      return;
-    }
-    responseController.deferred = undefined;
-    responseController.openedFingerprint = undefined;
-    updateTutorStatus(ctx, activity);
-    await collectPendingResponse(ctx, pending.draft);
-  };
-
-  const selectedCourseId = (): string => {
-    const courseId = activity.state.courseId;
-    if (courseId === undefined) {
-      throw new Error(
-        "Select a course with /course before starting tutor mode",
-      );
-    }
-    return courseId;
+    const next = await app.submitExam(coordinator.activity());
+    coordinator.persist(next, ctx);
+    coordinator.triggerTurn(aggregateExamSubmission(next));
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    responseController = { panelOpen: false };
+    responses.reset();
     examController = {};
     examPanelOpen = false;
     openedExamQuestionId = undefined;
-    let latestData: unknown;
-    for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type === "custom" && entry.customType === ACTIVITY_ENTRY_TYPE) {
-        latestData = entry.data;
-      }
-    }
-    activity =
-      latestData === undefined
-        ? idleActivity()
-        : app.restoreActivity(JSON.stringify(latestData));
-    syncExamController(activity);
-    updateTutorStatus(ctx, activity);
-    scheduleDeadline(activity, ctx);
+    await coordinator.start(ctx);
   });
 
   pi.on("session_shutdown", () => {
-    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-    deadlineTimer = undefined;
-    responseController = { panelOpen: false };
+    coordinator.shutdown();
+    responses.reset();
     examController = {};
     examPanelOpen = false;
     openedExamQuestionId = undefined;
@@ -606,23 +415,17 @@ export default function examTutorExtension(
   pi.on("agent_settled", (_event, ctx) => {
     // A response can trigger the next model turn. Do not keep Pi's settled-event
     // lifecycle open while the learner interacts with its panel.
-    void collectPendingResponse(ctx);
+    void responses.collectIfNeeded(ctx);
     void collectExamResponse(ctx);
   });
 
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension") return { action: "continue" };
 
-    if (responseController.deferred !== undefined) {
-      if (ctx.hasUI) {
-        ctx.ui.setEditorText(event.text);
-        ctx.ui.notify(
-          "Response deferred · run /resume-answer to continue",
-          "info",
-        );
-      }
+    if ((await responses.handleInput(event, ctx)) === "handled") {
       return { action: "handled" };
     }
+    const activity = coordinator.activity();
 
     if (activity.state.tag === "exam-active" && !ctx.hasUI) {
       // Bulk draft syntax remains a locally enforced fallback without a TUI.
@@ -643,7 +446,7 @@ export default function examTutorExtension(
           submittedAt,
         });
       }
-      persist(next, ctx);
+      coordinator.persist(next, ctx);
       if (ctx.hasUI) {
         let complete = false;
         if (next.state.tag === "exam-active") {
@@ -674,7 +477,7 @@ export default function examTutorExtension(
           return { action: "handled" };
         }
         const next = await app.acceptSubmission(activity, parsed);
-        persist(next, ctx);
+        coordinator.persist(next, ctx);
         return {
           action: "transform",
           text: learnerSubmission(parsed.answer, parsed.confidence),
@@ -689,7 +492,7 @@ export default function examTutorExtension(
           return { action: "handled" };
         }
         const next = await app.acceptSubmission(activity, { answer });
-        persist(next, ctx);
+        coordinator.persist(next, ctx);
         return {
           action: "transform",
           text: learnerSubmission(answer),
@@ -714,6 +517,7 @@ export default function examTutorExtension(
   });
 
   pi.on("before_agent_start", async (event) => {
+    const activity = coordinator.activity();
     if (activity.state.tag === "idle") return;
     const course = await store.getCourse(activity.state.courseId);
     return {
@@ -725,65 +529,23 @@ export default function examTutorExtension(
     app,
     store,
     clock,
-    getActivity: () => activity,
-    persist,
-    selectedCourseId,
-    triggerTurn,
-    resumeAnswer,
+    getActivity: coordinator.activity,
+    persist: coordinator.persist,
+    selectedCourseId: coordinator.selectedCourseId,
+    triggerTurn: coordinator.triggerTurn,
+    resumeAnswer: responses.resume,
     editExamAnswer,
     submitExamWithReview,
     dashboardBuilder,
   });
   registerMessageRenderers(pi);
-  registerTools(pi, app, () => activity, persist, showExamItem);
-}
-
-function responseDetails(current: SessionActivity):
-  | {
-      purpose: ResponsePurpose;
-      requiresConfidence: boolean;
-      mode: Exclude<TutorMode, "exam">;
-    }
-  | undefined {
-  switch (current.state.tag) {
-    case "awaiting-primary-answer":
-      return {
-        purpose: "graded",
-        requiresConfidence: true,
-        mode: current.state.mode,
-      };
-    case "awaiting-correction":
-      return {
-        purpose: "correction",
-        requiresConfidence: false,
-        mode: current.state.mode,
-      };
-    case "awaiting-explanation":
-      return {
-        purpose: "explanation",
-        requiresConfidence: false,
-        mode: current.state.mode,
-      };
-    default:
-      return undefined;
-  }
-}
-
-function activityFingerprint(current: SessionActivity): string {
-  const { state } = current;
-  if (
-    state.tag !== "awaiting-primary-answer" &&
-    state.tag !== "awaiting-correction" &&
-    state.tag !== "awaiting-explanation"
-  ) {
-    return "";
-  }
-  return [
-    state.tag,
-    state.question.id,
-    "attemptId" in state ? state.attemptId : "",
-    "hintLevel" in state ? state.hintLevel : "",
-  ].join(":");
+  registerTools(
+    pi,
+    app,
+    coordinator.activity,
+    coordinator.persist,
+    showExamItem,
+  );
 }
 
 interface CommandRuntime {
