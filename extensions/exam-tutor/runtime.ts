@@ -21,7 +21,6 @@ export interface SessionCoordinator {
 }
 
 export interface SessionCoordinatorCallbacks {
-  onActivityChanged(activity: SessionActivity): void;
   aggregateExamSubmission(activity: SessionActivity): string;
 }
 
@@ -96,7 +95,6 @@ export function createSessionCoordinator(
   };
 
   const notifyActivityChanged = (next: SessionActivity): void => {
-    callbacks.onActivityChanged(next);
     for (const listener of listeners) listener(next);
   };
 
