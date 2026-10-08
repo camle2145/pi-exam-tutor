@@ -1,4 +1,5 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test, vi } from "vitest";
 import {
   collectResponse,
@@ -10,6 +11,12 @@ const gradedRequest: ResponseRequest = {
   purpose: "graded",
   requiresConfidence: true,
 };
+
+function expectFrameWidths(lines: string[], width: number): void {
+  for (const line of lines) {
+    expect(visibleWidth(line)).toBe(width);
+  }
+}
 
 test("requires an intentional confidence action before confirmation", () => {
   const panel = createConfidencePanel({ confidence: undefined });
@@ -39,6 +46,18 @@ test("renders confidence in the same bordered dialog frame", () => {
   for (const line of lines.slice(1, -1)) {
     expect(line).toMatch(/^│.*│$/);
   }
+  expectFrameWidths(lines, 60);
+
+  const ansiTheme = {
+    fg: (_color: string, text: string) => `\u001B[31m${text}\u001B[0m`,
+  } as unknown as Theme;
+  const narrowAnsiLines = createConfidencePanel({
+    confidence: 70,
+    theme: ansiTheme,
+  }).render(20);
+
+  expect(narrowAnsiLines.join("\n")).toContain("\u001B[31m");
+  expectFrameWidths(narrowAnsiLines, 20);
 });
 
 test("keeps a multiline answer bounded and defers on escape", async () => {
@@ -63,7 +82,7 @@ test("keeps a multiline answer bounded and defers on escape", async () => {
             {},
             resolve,
           );
-          renderedLines = component.render(60);
+          renderedLines = component.render(20);
           component.handleInput("\x1b");
         });
       }),
@@ -85,6 +104,7 @@ test("keeps a multiline answer bounded and defers on escape", async () => {
   for (const line of renderedLines.slice(1, -1)) {
     expect(line).toMatch(/^│.*│$/);
   }
+  expectFrameWidths(renderedLines, 20);
   expect(overlayOptions).toEqual({
     overlay: true,
     overlayOptions: {

@@ -337,10 +337,7 @@ function borderedPanel(
       border(`${right}╮`),
     ...lines.map(
       (line) =>
-        border("│") +
-        truncateToWidth(line, innerWidth, "", true) +
-        " ".repeat(Math.max(0, innerWidth - visibleWidth(line))) +
-        border("│"),
+        border("│") + truncateToWidth(line, innerWidth, "", true) + border("│"),
     ),
     border(`╰${"─".repeat(innerWidth)}╯`),
   ];
