@@ -31,6 +31,50 @@ test("supports select all, deselect all, and cancel", () => {
   expect(completed).toHaveBeenCalledWith(undefined);
 });
 
+test("restores current selections case-insensitively as lowercase extensions", () => {
+  const completed = vi.fn();
+  const panel = createExtensionFilterPanel(
+    [".md", ".pdf"],
+    completed,
+    new Set([".MD"]),
+  );
+
+  panel.handleInput("enter");
+
+  expect(completed).toHaveBeenCalledWith(new Set([".md"]));
+});
+
+test("selectExtensions restores uppercase current selections", async () => {
+  const current: ExtensionFilter = {
+    allExtensionsSelected: false,
+    selectedExtensions: new Set([".MD"]),
+  };
+  const custom = vi.fn(
+    async (factory) =>
+      new Promise((resolve) => {
+        const panel = factory(
+          { requestRender: vi.fn() },
+          { fg: (_color: string, text: string) => text },
+          {},
+          resolve,
+        );
+        panel.handleInput("enter");
+      }),
+  );
+  const ctx = {
+    mode: "tui",
+    hasUI: true,
+    ui: { custom },
+  } as unknown as ExtensionCommandContext;
+
+  await expect(
+    selectExtensions(ctx, [".md", ".pdf"], current),
+  ).resolves.toEqual({
+    allExtensionsSelected: false,
+    selectedExtensions: new Set([".md"]),
+  });
+});
+
 test("renders a focused, bounded extension panel", () => {
   const panel = createExtensionFilterPanel(
     [".long-extension", ".pdf"],

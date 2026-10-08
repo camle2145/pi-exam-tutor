@@ -32,17 +32,17 @@ export async function selectExtensions(
   if (extensions.length === 0) return current;
   if (ctx.mode !== "tui") return undefined;
 
-  const extensionSet = new Set(extensions);
+  const extensionSet = canonicalExtensionSet(extensions);
   const initiallySelected = current.allExtensionsSelected
     ? extensionSet
     : new Set(
-        [...current.selectedExtensions].filter((extension) =>
-          extensionSet.has(extension),
-        ),
+        [...current.selectedExtensions]
+          .map(canonicalExtension)
+          .filter((extension) => extensionSet.has(extension)),
       );
   const selected = await ctx.ui.custom<Set<string> | undefined>(
     (tui, theme, _keybindings, done) =>
-      createExtensionFilterPanel(extensions, done, initiallySelected, {
+      createExtensionFilterPanel([...extensionSet], done, initiallySelected, {
         tui,
         theme,
       }),
@@ -69,9 +69,9 @@ export function createExtensionFilterPanel(
   options: ExtensionFilterPanelOptions = {},
 ): ExtensionFilterPanel {
   return new ExtensionFilterPanel(
-    [...new Set(extensions)],
+    [...canonicalExtensionSet(extensions)],
     complete,
-    initiallySelected,
+    new Set([...initiallySelected].map(canonicalExtension)),
     options,
   );
 }
@@ -177,6 +177,14 @@ export class ExtensionFilterPanel implements Component, Focusable {
   private refresh(): void {
     this.options.tui?.requestRender();
   }
+}
+
+function canonicalExtension(extension: string): string {
+  return extension.toLowerCase();
+}
+
+function canonicalExtensionSet(extensions: readonly string[]): Set<string> {
+  return new Set(extensions.map(canonicalExtension));
 }
 
 function keyMatches(

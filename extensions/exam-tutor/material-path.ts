@@ -1,5 +1,13 @@
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
-import { extname, isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  extname,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 
 export interface MaterialSelection {
   readonly paths: readonly string[];
@@ -36,7 +44,7 @@ export async function resolveMaterialSelection(
 
   const root = await canonicalRoot(rootDirectory);
   const selected = await resolveRequestedPath(root, requestedPath);
-  const configured = await canonicalConfiguredPaths(configuredPaths);
+  const configured = await canonicalConfiguredPaths(root, configuredPaths);
   const paths = await eligibleFiles(selected, filter, configured);
 
   return { kind: selected.kind, paths };
@@ -72,7 +80,7 @@ export async function listMaterialDirectory(
     throw new Error("Material directory path must name a directory");
   }
 
-  const configured = await canonicalConfiguredPaths(configuredPaths);
+  const configured = await canonicalConfiguredPaths(root, configuredPaths);
   const entries = await readdir(directory.path, { withFileTypes: true });
   const listed: MaterialDirectoryEntry[] = [];
   for (const entry of entries.sort((left, right) =>
@@ -105,7 +113,21 @@ async function resolveRequestedPath(
   root: string,
   requestedPath: string,
 ): Promise<MaterialPath> {
-  const candidate = resolve(root, requestedPath);
+  const components = requestedPath.split(/[\\/]/);
+  if (components.includes("..")) {
+    throw new Error("Material path must not contain traversal components");
+  }
+
+  let candidate = root;
+  for (const component of components) {
+    if (component === "" || component === ".") continue;
+    candidate = join(candidate, component);
+    const details = await lstat(candidate);
+    if (details.isSymbolicLink()) {
+      throw new Error("Material path must not traverse symbolic links");
+    }
+  }
+
   const inspected = await inspectPath(candidate, root);
   if (inspected === undefined) {
     throw new Error("Material path must name a regular file or directory");
@@ -181,18 +203,24 @@ function isEligible(path: string, filter: ExtensionFilter): boolean {
 }
 
 async function canonicalConfiguredPaths(
+  root: string,
   configuredPaths: ReadonlySet<string>,
 ): Promise<ReadonlySet<string>> {
   const paths = await Promise.all(
     [...configuredPaths].map(async (path) => {
+      if (!isAbsolute(path) || path !== normalize(path)) return undefined;
       try {
-        return await realpath(path);
+        assertUnderRoot(root, path);
+        const canonical = await realpath(path);
+        if (canonical !== path) return undefined;
+        assertUnderRoot(root, canonical);
+        return canonical;
       } catch {
-        return resolve(path);
+        return undefined;
       }
     }),
   );
-  return new Set(paths);
+  return new Set(paths.filter((path): path is string => path !== undefined));
 }
 
 function assertUnderRoot(root: string, candidate: string): void {

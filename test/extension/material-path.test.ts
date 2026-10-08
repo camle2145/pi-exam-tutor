@@ -74,11 +74,97 @@ test("rejects absolute paths and paths outside the canonical root", async () => 
   ).rejects.toThrow();
 });
 
+test("rejects traversal that would normalize back inside the root", async () => {
+  const root = await materialFixtureRoot();
+
+  await expect(
+    resolveMaterialSelection(
+      root,
+      "materials/../materials",
+      allExtensions(),
+      new Set(),
+    ),
+  ).rejects.toThrow();
+});
+
+test("rejects paths that traverse an intermediate directory symlink", async () => {
+  const root = await materialFixtureRoot();
+  await symlink(join(root, "materials"), join(root, "alias"));
+
+  await expect(
+    resolveMaterialSelection(
+      root,
+      "alias/lecture.md",
+      allExtensions(),
+      new Set(),
+    ),
+  ).rejects.toThrow();
+});
+
 test("discovers extensions across the whole rooted tree", async () => {
   expect(await discoverExtensions(await materialFixtureRoot())).toEqual([
     ".md",
     ".pdf",
   ]);
+});
+
+test("includes extensionless files only when all extensions are selected", async () => {
+  const root = await materialFixtureRoot();
+  await writeFile(join(root, "materials", "notes"), "notes");
+
+  await expect(
+    resolveMaterialSelection(
+      root,
+      "materials/notes",
+      allExtensions(),
+      new Set(),
+    ),
+  ).resolves.toEqual({
+    kind: "file",
+    paths: [join(root, "materials", "notes")],
+  });
+  await expect(
+    resolveMaterialSelection(
+      root,
+      "materials/notes",
+      markdownOnlyFilter(),
+      new Set(),
+    ),
+  ).resolves.toEqual({ kind: "file", paths: [] });
+});
+
+test("matches uppercase file extensions against lowercase filters", async () => {
+  const root = await materialFixtureRoot();
+  await writeFile(join(root, "materials", "UPPER.MD"), "upper");
+
+  await expect(
+    resolveMaterialSelection(
+      root,
+      "materials/UPPER.MD",
+      markdownOnlyFilter(),
+      new Set(),
+    ),
+  ).resolves.toEqual({
+    kind: "file",
+    paths: [join(root, "materials", "UPPER.MD")],
+  });
+});
+
+test("ignores malformed configured paths", async () => {
+  const root = await materialFixtureRoot();
+  const existing = join(root, "materials", "existing.md");
+
+  await expect(
+    resolveMaterialSelection(
+      root,
+      "materials/existing.md",
+      allExtensions(),
+      new Set([
+        "materials/existing.md",
+        `${root}/materials/nested/../existing.md`,
+      ]),
+    ),
+  ).resolves.toEqual({ kind: "file", paths: [existing] });
 });
 
 test("lists configured files and unavailable directories as disabled", async () => {
