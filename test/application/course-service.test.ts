@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { assertCourseInvariant, type Course } from "../../src/domain.js";
 import { createApplicationFixture } from "./setup.js";
 
@@ -59,6 +59,84 @@ test("rejects non-normalized material paths through the facade", async () => {
   await expect(
     app.addMaterial(course.id, "/courses/physics/../notes.md"),
   ).rejects.toThrow("Material path must be absolute and normalized");
+});
+
+test("adds a batch of material paths atomically", async () => {
+  const { app, course } = await createApplicationFixture();
+
+  const updated = await app.addMaterials(course.id, [
+    "/courses/physics/week-1.md",
+    "/courses/physics/week-2.md",
+  ]);
+
+  expect(updated.revision).toBe(course.revision + 1);
+  const addedMaterialIds = updated.materials
+    .slice(course.materials.length)
+    .map(({ id }) => id);
+  expect(addedMaterialIds).toEqual([expect.any(String), expect.any(String)]);
+  expect(new Set(addedMaterialIds).size).toBe(2);
+  expect(updated.materials.map(({ path }) => path)).toEqual([
+    "/courses/physics/notes.md",
+    "/courses/physics/week-1.md",
+    "/courses/physics/week-2.md",
+  ]);
+});
+
+test("does not persist part of an invalid material batch", async () => {
+  const { app, course, store } = await createApplicationFixture();
+  const saveCourse = vi.spyOn(store, "saveCourse");
+
+  await expect(
+    app.addMaterials(course.id, [
+      "/courses/physics/week-1.md",
+      "/courses/physics/../outside.md",
+    ]),
+  ).rejects.toThrow("Material path must be absolute and normalized");
+
+  expect(saveCourse).not.toHaveBeenCalled();
+  await expect(store.getCourse(course.id)).resolves.toEqual(course);
+});
+
+test("does not persist a material batch with duplicate input paths", async () => {
+  const { app, course, store } = await createApplicationFixture();
+  const saveCourse = vi.spyOn(store, "saveCourse");
+
+  await expect(
+    app.addMaterials(course.id, [
+      "/courses/physics/week-1.md",
+      "/courses/physics/week-1.md",
+    ]),
+  ).rejects.toThrow();
+
+  expect(saveCourse).not.toHaveBeenCalled();
+  await expect(store.getCourse(course.id)).resolves.toEqual(course);
+});
+
+test("does not persist a material batch with an already configured path", async () => {
+  const { app, course, store } = await createApplicationFixture();
+  const saveCourse = vi.spyOn(store, "saveCourse");
+
+  await expect(
+    app.addMaterials(course.id, [
+      "/courses/physics/week-1.md",
+      "/courses/physics/notes.md",
+    ]),
+  ).rejects.toThrow(
+    "Material path is already configured: /courses/physics/notes.md",
+  );
+
+  expect(saveCourse).not.toHaveBeenCalled();
+  await expect(store.getCourse(course.id)).resolves.toEqual(course);
+});
+
+test("does not add an empty material batch", async () => {
+  const { app, course, store } = await createApplicationFixture();
+  const saveCourse = vi.spyOn(store, "saveCourse");
+
+  await expect(app.addMaterials(course.id, [])).rejects.toThrow();
+
+  expect(saveCourse).not.toHaveBeenCalled();
+  await expect(store.getCourse(course.id)).resolves.toEqual(course);
 });
 
 test("replaces stale pending concepts with a fresh extraction batch", async () => {

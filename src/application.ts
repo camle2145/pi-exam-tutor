@@ -32,6 +32,10 @@ export interface TutorApplication {
     session: SessionActivity,
   ): Promise<SessionActivity>;
   addMaterial(courseId: string, absolutePath: string): Promise<Course>;
+  addMaterials(
+    courseId: string,
+    absolutePaths: readonly string[],
+  ): Promise<Course>;
   requestMode(
     courseId: string,
     mode: TutorMode,
@@ -130,6 +134,13 @@ export class TutorApplicationService implements TutorApplication {
 
   async addMaterial(courseId: string, absolutePath: string): Promise<Course> {
     return this.courses.addMaterial(courseId, absolutePath);
+  }
+
+  async addMaterials(
+    courseId: string,
+    absolutePaths: readonly string[],
+  ): Promise<Course> {
+    return this.courses.addMaterials(courseId, absolutePaths);
   }
 
   async requestMode(

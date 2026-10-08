@@ -24,24 +24,27 @@ export class CourseService {
   }
 
   async addMaterial(courseId: string, absolutePath: string): Promise<Course> {
-    if (!isAbsolute(absolutePath) || normalize(absolutePath) !== absolutePath) {
-      throw new Error("Material path must be absolute and normalized");
-    }
+    return this.addMaterials(courseId, [absolutePath]);
+  }
 
+  async addMaterials(
+    courseId: string,
+    absolutePaths: readonly string[],
+  ): Promise<Course> {
+    assertMaterialPaths(absolutePaths);
     const course = await this.runtime.store.getCourse(courseId);
-    if (course.materials.some(({ path }) => path === absolutePath)) {
-      throw new Error(`Material path is already configured: ${absolutePath}`);
-    }
+    assertNewMaterialPaths(course, absolutePaths);
+    const addedAt = this.runtime.clock.now().toISOString();
     const next: Course = {
       ...course,
       revision: course.revision + 1,
       materials: [
         ...course.materials,
-        {
+        ...absolutePaths.map((path) => ({
           id: this.runtime.ids.next("material"),
-          path: absolutePath,
-          addedAt: this.runtime.clock.now().toISOString(),
-        },
+          path,
+          addedAt,
+        })),
       ],
     };
     assertCourseInvariant(next);
@@ -245,5 +248,35 @@ export class CourseService {
       course.revision,
       this.runtime.operationId(),
     );
+  }
+}
+
+function assertMaterialPaths(absolutePaths: readonly string[]): void {
+  if (absolutePaths.length === 0) {
+    throw new Error("Must add at least one material path");
+  }
+
+  for (const path of absolutePaths) {
+    if (!isAbsolute(path) || normalize(path) !== path) {
+      throw new Error("Material path must be absolute and normalized");
+    }
+  }
+}
+
+function assertNewMaterialPaths(
+  course: Course,
+  absolutePaths: readonly string[],
+): void {
+  const configuredPaths = new Set(course.materials.map(({ path }) => path));
+  const requestedPaths = new Set<string>();
+
+  for (const path of absolutePaths) {
+    if (configuredPaths.has(path)) {
+      throw new Error(`Material path is already configured: ${path}`);
+    }
+    if (requestedPaths.has(path)) {
+      throw new Error(`Duplicate material path: ${path}`);
+    }
+    requestedPaths.add(path);
   }
 }
