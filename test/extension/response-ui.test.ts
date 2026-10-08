@@ -26,6 +26,21 @@ test("requires an intentional confidence action before confirmation", () => {
   });
 });
 
+test("renders confidence in the same bordered dialog frame", () => {
+  const panel = createConfidencePanel({ confidence: 70 });
+
+  const lines = panel.render(60);
+
+  expect(lines[0]).toContain("╭");
+  expect(lines[0]).toContain("╮");
+  expect(lines.at(-1)).toContain("╰");
+  expect(lines.at(-1)).toContain("╯");
+  expect(lines.join("\n")).toContain("Confidence: 70 / 100");
+  for (const line of lines.slice(1, -1)) {
+    expect(line).toMatch(/^│.*│$/);
+  }
+});
+
 test("keeps a multiline answer bounded and defers on escape", async () => {
   let overlayOptions: unknown;
   let renderedLines: string[] = [];
@@ -62,14 +77,21 @@ test("keeps a multiline answer bounded and defers on escape", async () => {
   });
 
   expect(result).toEqual({ kind: "deferred", draft: { answer: "draft" } });
-  expect(renderedLines).toHaveLength(9); // six answer rows, borders, and hint
+  expect(renderedLines).toHaveLength(11);
+  expect(renderedLines[0]).toContain("╭");
+  expect(renderedLines[0]).toContain("╮");
+  expect(renderedLines.at(-1)).toContain("╰");
+  expect(renderedLines.at(-1)).toContain("╯");
+  for (const line of renderedLines.slice(1, -1)) {
+    expect(line).toMatch(/^│.*│$/);
+  }
   expect(overlayOptions).toEqual({
     overlay: true,
     overlayOptions: {
       anchor: "bottom-center",
-      width: "70%",
+      width: "100%",
       maxHeight: "50%",
-      margin: 1,
+      margin: { left: 1, right: 1, bottom: 1 },
     },
   });
 });

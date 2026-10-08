@@ -8,6 +8,7 @@ import {
   type Focusable,
   type TUI,
   truncateToWidth,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 
 export type ResponsePurpose = "graded" | "correction" | "explanation" | "exam";
@@ -28,9 +29,9 @@ const OVERLAY_OPTIONS = {
   overlay: true,
   overlayOptions: {
     anchor: "bottom-center" as const,
-    width: "70%" as const,
+    width: "100%" as const,
     maxHeight: "50%" as const,
-    margin: 1,
+    margin: { left: 1, right: 1, bottom: 1 },
   },
 };
 
@@ -107,7 +108,7 @@ class AnswerPanel implements Component, Focusable {
 
   constructor(
     tui: TUI,
-    theme: Theme,
+    private readonly theme: Theme,
     answer: string,
     private readonly continueWith: (result: string | ResponseResult) => void,
   ) {
@@ -134,19 +135,20 @@ class AnswerPanel implements Component, Focusable {
   }
 
   render(width: number): string[] {
-    const editorLines = this.editor.render(width);
+    const innerWidth = Math.max(1, width - 2);
+    const editorLines = this.editor.render(innerWidth);
     const bottomBorder = editorLines.pop() ?? "";
     while (editorLines.length < ANSWER_ROWS + 1) {
       editorLines.push("");
     }
-    return [
+    return borderedPanel(this.theme, width, "Your answer", [
       ...editorLines,
       bottomBorder,
       truncateToWidth(
         "Enter continue • Shift+Enter newline • Esc defer",
-        width,
+        innerWidth,
       ),
-    ];
+    ]);
   }
 }
 
@@ -243,29 +245,29 @@ export class ConfidencePanel implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
+    const innerWidth = Math.max(1, width - 2);
     const confirmation = this.interacted ? "" : " (adjust or type to confirm)";
     const error = this.error();
-    return [
-      truncateToWidth(
-        this.options.theme?.fg(
-          this.interacted ? "text" : "dim",
-          `Confidence: ${this.confidence} / 100${confirmation}`,
-        ) ?? `Confidence: ${this.confidence} / 100${confirmation}`,
-        width,
-      ),
-      ...(error === undefined
+    const confidenceLine =
+      this.options.theme?.fg(
+        this.interacted ? "text" : "dim",
+        `Confidence: ${this.confidence} / 100${confirmation}`,
+      ) ?? `Confidence: ${this.confidence} / 100${confirmation}`;
+    const errorLine =
+      error === undefined
+        ? undefined
+        : (this.options.theme?.fg("error", error) ?? error);
+
+    return borderedPanel(this.options.theme, width, "Confidence", [
+      truncateToWidth(confidenceLine, innerWidth),
+      ...(errorLine === undefined
         ? []
-        : [
-            truncateToWidth(
-              this.options.theme?.fg("error", error) ?? error,
-              width,
-            ),
-          ]),
+        : [truncateToWidth(errorLine, innerWidth)]),
       truncateToWidth(
         "←/→ adjust • type number • Enter continue • Esc defer",
-        width,
+        innerWidth,
       ),
-    ];
+    ]);
   }
 
   private adjust(amount: number): void {
@@ -314,6 +316,34 @@ function editorTheme(theme: Theme): EditorTheme {
     borderColor: (text: string) => theme.fg("border", text),
     selectList: {} as EditorTheme["selectList"],
   };
+}
+
+function borderedPanel(
+  theme: Theme | undefined,
+  width: number,
+  title: string,
+  lines: string[],
+): string[] {
+  const innerWidth = Math.max(1, width - 2);
+  const border = (text: string): string => theme?.fg("border", text) ?? text;
+  const titleText = truncateToWidth(` ${title} `, innerWidth);
+  const titleWidth = visibleWidth(titleText);
+  const left = "─".repeat(Math.floor((innerWidth - titleWidth) / 2));
+  const right = "─".repeat(Math.max(0, innerWidth - titleWidth - left.length));
+
+  return [
+    border(`╭${left}`) +
+      (theme?.fg("accent", titleText) ?? titleText) +
+      border(`${right}╮`),
+    ...lines.map(
+      (line) =>
+        border("│") +
+        truncateToWidth(line, innerWidth, "", true) +
+        " ".repeat(Math.max(0, innerWidth - visibleWidth(line))) +
+        border("│"),
+    ),
+    border(`╰${"─".repeat(innerWidth)}╯`),
+  ];
 }
 
 /** Corrections are not gradeable, so they never collect confidence. */
