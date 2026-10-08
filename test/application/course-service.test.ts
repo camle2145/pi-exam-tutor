@@ -61,6 +61,20 @@ test("rejects non-normalized material paths through the facade", async () => {
   ).rejects.toThrow("Material path must be absolute and normalized");
 });
 
+test("adds one material through the singular facade", async () => {
+  const { app, course, store } = await createApplicationFixture();
+  const path = "/courses/physics/week-1.md";
+
+  const updated = await app.addMaterial(course.id, path);
+
+  expect(updated.revision).toBe(course.revision + 1);
+  expect(updated.materials.map(({ path: materialPath }) => materialPath)).toEqual([
+    "/courses/physics/notes.md",
+    path,
+  ]);
+  await expect(store.getCourse(course.id)).resolves.toEqual(updated);
+});
+
 test("adds a batch of material paths atomically", async () => {
   const { app, course } = await createApplicationFixture();
 
