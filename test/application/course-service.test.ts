@@ -68,10 +68,9 @@ test("adds one material through the singular facade", async () => {
   const updated = await app.addMaterial(course.id, path);
 
   expect(updated.revision).toBe(course.revision + 1);
-  expect(updated.materials.map(({ path: materialPath }) => materialPath)).toEqual([
-    "/courses/physics/notes.md",
-    path,
-  ]);
+  expect(
+    updated.materials.map(({ path: materialPath }) => materialPath),
+  ).toEqual(["/courses/physics/notes.md", path]);
   await expect(store.getCourse(course.id)).resolves.toEqual(updated);
 });
 
