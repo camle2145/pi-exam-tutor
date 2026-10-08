@@ -131,6 +131,9 @@ test("builds a source-safe prompt with exact active hint state", () => {
   expect(prompt).toContain("closed-book, free-response question");
   expect(prompt).toContain("0–100 confidence");
   expect(prompt).toContain("Cite a configured material path and locator");
+  expect(prompt).toContain(
+    "Prioritize concepts highlighted in course-material summaries, study guides, and learning objectives when those sections are present.",
+  );
   expect(prompt).toContain("current hint level is 2");
 });
 

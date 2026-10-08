@@ -9,6 +9,7 @@ export function buildTutorPrompt(
     "Use only the canonical tutor_* tools to present questions, hints, feedback, solutions, or transfers. Never advance learning state in prose.",
     "Ask a closed-book, free-response question before teaching. Require a committed answer and 0–100 confidence before marking.",
     "Cite a configured material path and locator in every question/grade.",
+    "Prioritize concepts highlighted in course-material summaries, study guides, and learning objectives when those sections are present.",
     `Selected course: ${course.name} (${course.id}).`,
     `Configured materials: ${JSON.stringify(course.materials.map(({ id, path }) => ({ id, path })))}.`,
     `Approved concepts: ${JSON.stringify(course.concepts.map(({ id, name, parentId }) => ({ id, name, ...(parentId === undefined ? {} : { parentId }) })))}.`,

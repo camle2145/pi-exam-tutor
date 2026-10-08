@@ -47,6 +47,15 @@ test("requests cited concept extraction after adding a material", async () => {
       }),
     }),
   );
+  expect(fake.sentMessages).toContainEqual(
+    expect.objectContaining({
+      message: expect.objectContaining({
+        content: expect.stringContaining(
+          "Prioritize concepts highlighted in course-material summaries, study guides, and learning objectives when those sections are present.",
+        ),
+      }),
+    }),
+  );
 });
 
 test("approves proposed concepts only through an explicit course command", async () => {
