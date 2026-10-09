@@ -102,7 +102,9 @@ test("adds a typed relative folder atomically", async () => {
 test("browses a folder, excludes configured files, and extracts once", async () => {
   const root = await materialFixtureRoot();
   const fake = createFakePi({ activity: idle, cwd: root });
-  fake.ui.select.mockResolvedValueOnce("materials/");
+  fake.ui.select
+    .mockResolvedValueOnce("materials/")
+    .mockResolvedValueOnce("Add this folder recursively");
   fake.ui.confirm.mockResolvedValueOnce(true);
   const dependencies = createExtensionDependencies();
   vi.mocked(dependencies.store.getCourse).mockResolvedValue({
@@ -144,6 +146,81 @@ test("browses and adds an individual material file", async () => {
   ]);
   expect(dependencies.app.addMaterial).not.toHaveBeenCalled();
   expect(fake.sentMessages).toHaveLength(1);
+});
+
+test("browses from the root into a child and selects a nested file", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root });
+  fake.ui.select
+    .mockResolvedValueOnce("materials/")
+    .mockResolvedValueOnce("nested/")
+    .mockResolvedValueOnce("solution.md");
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add");
+
+  expect(dependencies.app.addMaterials).toHaveBeenCalledWith(course.id, [
+    join(root, "materials", "nested", "solution.md"),
+  ]);
+  expect(fake.ui.select.mock.calls.map(([title]) => title)).toEqual([
+    "Add course materials: .",
+    "Add course materials: materials",
+    "Add course materials: materials/nested",
+  ]);
+});
+
+test("navigates to a parent only below the root", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root });
+  fake.ui.select
+    .mockResolvedValueOnce("materials/")
+    .mockResolvedValueOnce("nested/")
+    .mockResolvedValueOnce("..")
+    .mockResolvedValueOnce("..")
+    .mockResolvedValueOnce("overview.md");
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add");
+
+  expect(dependencies.app.addMaterials).toHaveBeenCalledWith(course.id, [
+    join(root, "overview.md"),
+  ]);
+  expect(fake.ui.select.mock.calls.map(([, choices]) => choices)).toEqual([
+    expect.not.arrayContaining([".."]),
+    expect.arrayContaining([".."]),
+    expect.arrayContaining([".."]),
+    expect.arrayContaining([".."]),
+    expect.not.arrayContaining([".."]),
+  ]);
+});
+
+test("recursively imports the currently viewed child folder", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root });
+  fake.ui.select
+    .mockResolvedValueOnce("materials/")
+    .mockResolvedValueOnce("Add this folder recursively");
+  fake.ui.confirm.mockResolvedValueOnce(true);
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add");
+
+  expect(fake.ui.confirm).toHaveBeenCalledWith(
+    "Add course materials",
+    expect.stringContaining("4 material file(s) from materials"),
+  );
+  expect(dependencies.app.addMaterials).toHaveBeenCalledWith(course.id, [
+    join(root, "materials", "existing.md"),
+    join(root, "materials", "lecture.md"),
+    join(root, "materials", "nested", "solution.md"),
+    join(root, "materials", "worksheet.pdf"),
+  ]);
 });
 
 test("selects a file named like the filter action instead of opening the filter", async () => {
@@ -215,7 +292,9 @@ test("uniquely selects the filter action and both similarly named files", async 
 test("does not add or extract when folder import is not confirmed", async () => {
   const root = await materialFixtureRoot();
   const fake = createFakePi({ activity: idle, cwd: root });
-  fake.ui.select.mockResolvedValueOnce("materials/");
+  fake.ui.select
+    .mockResolvedValueOnce("materials/")
+    .mockResolvedValueOnce("Add this folder recursively");
   fake.ui.confirm.mockResolvedValueOnce(false);
   const dependencies = createExtensionDependencies();
   extension(fake.api, dependencies);
@@ -263,6 +342,46 @@ test("requires a relative path outside TUI mode", async () => {
   expect(dependencies.app.addMaterials).not.toHaveBeenCalled();
   expect(fake.sentMessages).toEqual([]);
 });
+
+test.each(['""', "''"])(
+  "rejects an explicitly supplied empty quoted path in TUI: %s",
+  async (quotedPath) => {
+    const root = await materialFixtureRoot();
+    const fake = createFakePi({ activity: idle, cwd: root });
+    const dependencies = createExtensionDependencies();
+    extension(fake.api, dependencies);
+    await fake.startSession();
+
+    await fake.invokeCommand("course", `add ${quotedPath}`);
+
+    expect(fake.ui.notify).toHaveBeenCalledWith(
+      "A relative material path is required",
+      "error",
+    );
+    expect(fake.ui.select).not.toHaveBeenCalled();
+    expect(dependencies.app.addMaterials).not.toHaveBeenCalled();
+    expect(fake.sentMessages).toEqual([]);
+  },
+);
+
+test.each(['""', "''"])(
+  "does not import the root for an explicitly supplied empty quoted path outside TUI: %s",
+  async (quotedPath) => {
+    const root = await materialFixtureRoot();
+    const fake = createFakePi({ activity: idle, cwd: root, mode: "print" });
+    const dependencies = createExtensionDependencies();
+    extension(fake.api, dependencies);
+    await fake.startSession();
+
+    await expect(
+      fake.invokeCommand("course", `add ${quotedPath}`),
+    ).rejects.toThrow("A relative material path is required");
+
+    expect(fake.ui.select).not.toHaveBeenCalled();
+    expect(dependencies.app.addMaterials).not.toHaveBeenCalled();
+    expect(fake.sentMessages).toEqual([]);
+  },
+);
 
 test("rejects absolute material paths without calling the application", async () => {
   const root = await materialFixtureRoot();

@@ -177,8 +177,16 @@ export function createCourseController(
         const configuredPaths = new Set(
           course.materials.map(({ path }) => path),
         );
+        const hasArgument = value.trim() !== "";
         const requestedPath = unquote(value.trim());
-        if (requestedPath !== "" && isAbsolute(requestedPath)) {
+        if (hasArgument && requestedPath === "") {
+          if (ctx.hasUI) {
+            notifyError(ctx, "A relative material path is required");
+            return;
+          }
+          throw new Error("A relative material path is required");
+        }
+        if (hasArgument && isAbsolute(requestedPath)) {
           notifyError(
             ctx,
             "Material path must be relative to Pi's launch directory",
@@ -188,7 +196,12 @@ export function createCourseController(
 
         let selection: MaterialSelection | undefined;
         try {
-          selection = await addMaterialSelection(ctx, value, configuredPaths);
+          selection = await addMaterialSelection(
+            ctx,
+            hasArgument,
+            requestedPath,
+            configuredPaths,
+          );
         } catch (error) {
           notifyError(ctx, errorMessage(error));
           return;
@@ -199,7 +212,7 @@ export function createCourseController(
           return;
         }
         if (
-          requestedPath !== "" &&
+          hasArgument &&
           selection.kind === "directory" &&
           ctx.mode === "tui" &&
           !(await confirmDirectorySelection(ctx, selection, requestedPath))
@@ -234,10 +247,11 @@ export function createCourseController(
 
 async function addMaterialSelection(
   ctx: ExtensionCommandContext,
-  requestedValue: string,
+  hasArgument: boolean,
+  requestedPath: string,
   configuredPaths: ReadonlySet<string>,
 ): Promise<MaterialSelection | undefined> {
-  if (requestedValue.trim() === "") {
+  if (!hasArgument) {
     if (ctx.mode !== "tui") {
       notifyError(ctx, "A relative material path is required");
       return undefined;
@@ -246,7 +260,7 @@ async function addMaterialSelection(
   }
   return resolveMaterialSelection(
     ctx.cwd,
-    unquote(requestedValue.trim()),
+    requestedPath,
     allExtensions(),
     configuredPaths,
   );

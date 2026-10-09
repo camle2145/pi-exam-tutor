@@ -142,6 +142,20 @@ test("does not persist a material batch with an already configured path", async 
   await expect(store.getCourse(course.id)).resolves.toEqual(course);
 });
 
+test("leaves stored materials unchanged when saving a batch fails", async () => {
+  const { app, course, store } = await createApplicationFixture();
+  const saveCourse = vi
+    .spyOn(store, "saveCourse")
+    .mockRejectedValueOnce(new Error("save failed"));
+
+  await expect(
+    app.addMaterials(course.id, ["/courses/physics/week-1.md"]),
+  ).rejects.toThrow("save failed");
+
+  expect(saveCourse).toHaveBeenCalledTimes(1);
+  await expect(store.getCourse(course.id)).resolves.toEqual(course);
+});
+
 test("does not add an empty material batch", async () => {
   const { app, course, store } = await createApplicationFixture();
   const saveCourse = vi.spyOn(store, "saveCourse");

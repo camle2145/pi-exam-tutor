@@ -12,6 +12,7 @@ import {
 } from "./material-path.js";
 
 const FILTER_ACTION = "Filter extensions…";
+const ADD_DIRECTORY_ACTION = "Add this folder recursively";
 const PARENT_ACTION = "..";
 
 /** Lets a learner select an eligible material file or directory beneath ctx.cwd. */
@@ -33,6 +34,7 @@ export async function selectMaterialPaths(
     const labeledEntries = labelEntries(root, entries);
     const choices = [
       FILTER_ACTION,
+      ADD_DIRECTORY_ACTION,
       ...(directory === "." ? [] : [PARENT_ACTION]),
       ...labeledEntries.map((entry) => entry.label),
     ];
@@ -49,6 +51,24 @@ export async function selectMaterialPaths(
       );
       if (next !== undefined) filter = next;
       continue;
+    }
+    if (selected === ADD_DIRECTORY_ACTION) {
+      const selection = await resolveMaterialSelection(
+        root,
+        directory,
+        filter,
+        configuredPaths,
+      );
+      if (selection.paths.length === 0) continue;
+      if (
+        await ctx.ui.confirm(
+          "Add course materials",
+          `Add ${selection.paths.length} material file(s) from ${directory}?`,
+        )
+      ) {
+        return selection;
+      }
+      return undefined;
     }
     if (selected === PARENT_ACTION && directory !== ".") {
       directory = parentDirectory(directory);
@@ -69,23 +89,7 @@ export async function selectMaterialPaths(
         configuredPaths,
       );
     }
-
-    const selection = await resolveMaterialSelection(
-      root,
-      requestedPath,
-      filter,
-      configuredPaths,
-    );
-    if (selection.paths.length === 0) continue;
-    if (
-      await ctx.ui.confirm(
-        "Add course materials",
-        `Add ${selection.paths.length} material file(s) from ${requestedPath}?`,
-      )
-    ) {
-      return selection;
-    }
-    return undefined;
+    directory = requestedPath;
   }
 }
 
@@ -97,7 +101,11 @@ function labelEntries(
   root: string,
   entries: readonly MaterialDirectoryEntry[],
 ): readonly { entry: MaterialDirectoryEntry; label: string }[] {
-  const usedLabels = new Set([FILTER_ACTION, PARENT_ACTION]);
+  const usedLabels = new Set([
+    FILTER_ACTION,
+    ADD_DIRECTORY_ACTION,
+    PARENT_ACTION,
+  ]);
   return entries.map((entry) => {
     const baseLabel = entryLabel(entry);
     let label = baseLabel;
@@ -115,7 +123,8 @@ function labelEntries(
 function entryLabel(entry: MaterialDirectoryEntry): string {
   const name = entry.kind === "directory" ? `${entry.name}/` : entry.name;
   const disambiguatedName =
-    entry.kind === "file" && entry.name === FILTER_ACTION
+    entry.kind === "file" &&
+    (entry.name === FILTER_ACTION || entry.name === ADD_DIRECTORY_ACTION)
       ? `${name} (file)`
       : name;
   if (entry.disabled === "already-added") {
