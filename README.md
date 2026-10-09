@@ -44,11 +44,24 @@ Existing version-1 learning histories are upgraded in memory when read. They per
 
 ## Course concept curation
 
-Add authoritative course materials by absolute path, then review the source-cited proposals that extraction returns:
+Course materials are rooted at Pi's launch directory. Open the rooted browser or add a file or whole folder relative to that directory:
 
 ```text
-/course add /absolute/path/to/slides.pdf
-# Review extracted proposals by material, then:
+# Open the rooted browser at Pi's launch directory:
+/course add
+
+# Or add a file or whole folder relative to that directory:
+/course add materials/slides.pdf
+/course add materials/week-1
+```
+
+Folder imports recursively add matching new regular files. Choose `Filter extensions…` to open the filter dialog; it starts with all discovered extensions selected. Use Space to toggle, `a` to select all, `n` to select none, Enter to apply, or Escape to cancel. The filter is temporary and affects only that import.
+
+Paths are confined to the launch directory. Already-added entries are disabled, and selecting a folder shows its file count for confirmation. Stored citations continue to use canonical absolute paths.
+
+Review the source-cited proposals that extraction returns:
+
+```text
 /course concepts approve
 /course concepts rename newton-laws "Newton's laws of motion"
 /course concepts parent impulse newton-laws
