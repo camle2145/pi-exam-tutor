@@ -30,10 +30,11 @@ export async function selectMaterialPaths(
       filter,
       configuredPaths,
     );
+    const labeledEntries = labelEntries(root, entries);
     const choices = [
       FILTER_ACTION,
       ...(directory === "." ? [] : [PARENT_ACTION]),
-      ...entries.map(entryLabel),
+      ...labeledEntries.map((entry) => entry.label),
     ];
     const selected = await ctx.ui.select(
       `Add course materials: ${directory}`,
@@ -54,9 +55,9 @@ export async function selectMaterialPaths(
       continue;
     }
 
-    const entry = entries.find(
-      (candidate) => entryLabel(candidate) === selected,
-    );
+    const entry = labeledEntries.find(
+      (candidate) => candidate.label === selected,
+    )?.entry;
     if (entry === undefined || entry.disabled !== undefined) continue;
 
     const requestedPath = relative(root, entry.path);
@@ -90,6 +91,25 @@ export async function selectMaterialPaths(
 
 export function allExtensions(): ExtensionFilter {
   return { selectedExtensions: new Set(), allExtensionsSelected: true };
+}
+
+function labelEntries(
+  root: string,
+  entries: readonly MaterialDirectoryEntry[],
+): readonly { entry: MaterialDirectoryEntry; label: string }[] {
+  const usedLabels = new Set([FILTER_ACTION, PARENT_ACTION]);
+  return entries.map((entry) => {
+    const baseLabel = entryLabel(entry);
+    let label = baseLabel;
+    let suffix = 0;
+    while (usedLabels.has(label)) {
+      suffix += 1;
+      const pathLabel = relative(root, entry.path);
+      label = `${baseLabel} [${pathLabel}${suffix === 1 ? "" : ` #${suffix}`}]`;
+    }
+    usedLabels.add(label);
+    return { entry, label };
+  });
 }
 
 function entryLabel(entry: MaterialDirectoryEntry): string {

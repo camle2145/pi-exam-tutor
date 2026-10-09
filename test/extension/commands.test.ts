@@ -44,6 +44,10 @@ async function materialFixtureRoot(): Promise<string> {
   await writeFile(join(root, "materials", "nested", "solution.md"), "solution");
   await writeFile(join(root, "materials", "existing.md"), "existing");
   await writeFile(join(root, "Filter extensions…"), "filter-named-file");
+  await writeFile(
+    join(root, "Filter extensions… (file)"),
+    "similarly-named-file",
+  );
   return root;
 }
 
@@ -161,6 +165,51 @@ test("selects a file named like the filter action instead of opening the filter"
   ]);
   expect(fake.ui.confirm).not.toHaveBeenCalled();
   expect(fake.sentMessages).toHaveLength(1);
+});
+
+test("uniquely selects the filter action and both similarly named files", async () => {
+  const root = await materialFixtureRoot();
+
+  const actionFake = createFakePi({ activity: idle, cwd: root });
+  let actionSelections = 0;
+  actionFake.ui.select.mockImplementation(
+    async (_message: string, choices: string[]) => {
+      actionSelections += 1;
+      if (actionSelections === 1) return "Filter extensions…";
+      return choices.find((choice) => choice === "Filter extensions… (file)");
+    },
+  );
+  const actionDependencies = createExtensionDependencies();
+  extension(actionFake.api, actionDependencies);
+  await actionFake.startSession();
+  await actionFake.invokeCommand("course", "add");
+
+  expect(actionFake.ui.custom).toHaveBeenCalledTimes(1);
+  expect(actionDependencies.app.addMaterials).toHaveBeenCalledWith(course.id, [
+    join(root, "Filter extensions…"),
+  ]);
+
+  for (const [label, filename] of [
+    ["Filter extensions… (file)", "Filter extensions…"],
+    [
+      "Filter extensions… (file) [Filter extensions… (file)]",
+      "Filter extensions… (file)",
+    ],
+  ] as const) {
+    const fake = createFakePi({ activity: idle, cwd: root });
+    fake.ui.select.mockImplementationOnce(
+      async (_message: string, choices: string[]) =>
+        choices.find((choice) => choice === label),
+    );
+    const dependencies = createExtensionDependencies();
+    extension(fake.api, dependencies);
+    await fake.startSession();
+    await fake.invokeCommand("course", "add");
+
+    expect(dependencies.app.addMaterials).toHaveBeenCalledWith(course.id, [
+      join(root, filename),
+    ]);
+  }
 });
 
 test("does not add or extract when folder import is not confirmed", async () => {
