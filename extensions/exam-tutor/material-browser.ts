@@ -94,11 +94,17 @@ export function allExtensions(): ExtensionFilter {
 
 function entryLabel(entry: MaterialDirectoryEntry): string {
   const name = entry.kind === "directory" ? `${entry.name}/` : entry.name;
-  if (entry.disabled === "already-added") return `${name} — already added`;
-  if (entry.disabled === "no-eligible-files") {
-    return `${name} — no eligible files`;
+  const disambiguatedName =
+    entry.kind === "file" && entry.name === FILTER_ACTION
+      ? `${name} (file)`
+      : name;
+  if (entry.disabled === "already-added") {
+    return `${disambiguatedName} — already added`;
   }
-  return name;
+  if (entry.disabled === "no-eligible-files") {
+    return `${disambiguatedName} — no eligible files`;
+  }
+  return disambiguatedName;
 }
 
 function parentDirectory(directory: string): string {

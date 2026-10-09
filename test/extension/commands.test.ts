@@ -43,6 +43,7 @@ async function materialFixtureRoot(): Promise<string> {
   await writeFile(join(root, "materials", "worksheet.pdf"), "worksheet");
   await writeFile(join(root, "materials", "nested", "solution.md"), "solution");
   await writeFile(join(root, "materials", "existing.md"), "existing");
+  await writeFile(join(root, "Filter extensions…"), "filter-named-file");
   return root;
 }
 
@@ -138,6 +139,27 @@ test("browses and adds an individual material file", async () => {
     join(root, "overview.md"),
   ]);
   expect(dependencies.app.addMaterial).not.toHaveBeenCalled();
+  expect(fake.sentMessages).toHaveLength(1);
+});
+
+test("selects a file named like the filter action instead of opening the filter", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root });
+  fake.ui.select.mockResolvedValueOnce("Filter extensions… (file)");
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add");
+
+  expect(fake.ui.select.mock.calls[0]?.[1]).toContain("Filter extensions…");
+  expect(fake.ui.select.mock.calls[0]?.[1]).toContain(
+    "Filter extensions… (file)",
+  );
+  expect(dependencies.app.addMaterials).toHaveBeenCalledWith(course.id, [
+    join(root, "Filter extensions…"),
+  ]);
+  expect(fake.ui.confirm).not.toHaveBeenCalled();
   expect(fake.sentMessages).toHaveLength(1);
 });
 
