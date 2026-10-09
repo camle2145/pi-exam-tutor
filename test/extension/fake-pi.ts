@@ -9,6 +9,7 @@ export interface FakePiOptions {
   activity?: SessionActivity;
   activities?: SessionActivity[];
   mode?: ExtensionContext["mode"];
+  cwd?: string;
 }
 
 export function createFakePi(options: FakePiOptions = {}) {
@@ -43,6 +44,7 @@ export function createFakePi(options: FakePiOptions = {}) {
     setEditorText: vi.fn(),
     select: vi.fn(),
     input: vi.fn(),
+    confirm: vi.fn(),
     custom: vi.fn(async () => undefined),
     theme: {
       fg: (_color: string, text: string) => text,
@@ -52,7 +54,7 @@ export function createFakePi(options: FakePiOptions = {}) {
   const context = {
     mode: options.mode ?? "tui",
     hasUI: (options.mode ?? "tui") === "tui",
-    cwd: process.cwd(),
+    cwd: options.cwd ?? process.cwd(),
     ui,
     sessionManager: { getBranch: () => branch },
   } as unknown as ExtensionContext;

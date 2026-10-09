@@ -1,4 +1,7 @@
-import { expect, test, vi } from "vitest";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, test, vi } from "vitest";
 import { splitCommand } from "../../extensions/exam-tutor/commands.js";
 import extension from "../../extensions/exam-tutor/index.js";
 import type { SessionActivity } from "../../src/domain.js";
@@ -21,18 +24,51 @@ test("splits a slash command action from its remaining value", () => {
   });
 });
 
-test("requests cited concept extraction after adding a material", async () => {
-  const fake = createFakePi({ activity: idle });
+const materialRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    materialRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
+
+async function materialFixtureRoot(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "exam-tutor-command-materials-"));
+  materialRoots.push(root);
+  await mkdir(join(root, "materials", "nested"), { recursive: true });
+  await writeFile(join(root, "overview.md"), "overview");
+  await writeFile(join(root, "materials", "lecture.md"), "lecture");
+  await writeFile(join(root, "materials", "worksheet.pdf"), "worksheet");
+  await writeFile(join(root, "materials", "nested", "solution.md"), "solution");
+  await writeFile(join(root, "materials", "existing.md"), "existing");
+  return root;
+}
+
+test("adds a typed relative folder atomically", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root });
+  fake.ui.confirm.mockResolvedValueOnce(true);
   const dependencies = createExtensionDependencies();
   extension(fake.api, dependencies);
   await fake.startSession();
 
-  await fake.invokeCommand("course", "add /courses/physics/slides.pdf");
+  await fake.invokeCommand("course", "add materials");
 
-  expect(dependencies.app.addMaterial).toHaveBeenCalledWith(
-    course.id,
-    "/courses/physics/slides.pdf",
+  expect(dependencies.app.addMaterials).toHaveBeenCalledWith(course.id, [
+    join(root, "materials", "existing.md"),
+    join(root, "materials", "lecture.md"),
+    join(root, "materials", "nested", "solution.md"),
+    join(root, "materials", "worksheet.pdf"),
+  ]);
+  expect(dependencies.app.addMaterials).toHaveBeenCalledTimes(1);
+  expect(fake.ui.confirm).toHaveBeenCalledWith(
+    "Add course materials",
+    expect.stringContaining("4 material file(s) from materials"),
   );
+  expect(dependencies.app.addMaterial).not.toHaveBeenCalled();
+  expect(fake.sentMessages).toHaveLength(1);
   expect(fake.sentMessages).toContainEqual(
     expect.objectContaining({
       message: expect.objectContaining({
@@ -56,6 +92,122 @@ test("requests cited concept extraction after adding a material", async () => {
       }),
     }),
   );
+});
+
+test("browses a folder, excludes configured files, and extracts once", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root });
+  fake.ui.select.mockResolvedValueOnce("materials/");
+  fake.ui.confirm.mockResolvedValueOnce(true);
+  const dependencies = createExtensionDependencies();
+  vi.mocked(dependencies.store.getCourse).mockResolvedValue({
+    ...course,
+    materials: [
+      { ...course.materials[0]!, path: join(root, "materials", "existing.md") },
+    ],
+  });
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add");
+
+  expect(fake.ui.confirm).toHaveBeenCalledWith(
+    "Add course materials",
+    expect.stringContaining("3 material file(s) from materials"),
+  );
+  expect(dependencies.app.addMaterials).toHaveBeenCalledWith(course.id, [
+    join(root, "materials", "lecture.md"),
+    join(root, "materials", "nested", "solution.md"),
+    join(root, "materials", "worksheet.pdf"),
+  ]);
+  expect(dependencies.app.addMaterials).toHaveBeenCalledTimes(1);
+  expect(fake.sentMessages).toHaveLength(1);
+});
+
+test("browses and adds an individual material file", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root });
+  fake.ui.select.mockResolvedValueOnce("overview.md");
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add");
+
+  expect(dependencies.app.addMaterials).toHaveBeenCalledWith(course.id, [
+    join(root, "overview.md"),
+  ]);
+  expect(dependencies.app.addMaterial).not.toHaveBeenCalled();
+  expect(fake.sentMessages).toHaveLength(1);
+});
+
+test("does not add or extract when folder import is not confirmed", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root });
+  fake.ui.select.mockResolvedValueOnce("materials/");
+  fake.ui.confirm.mockResolvedValueOnce(false);
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add");
+
+  expect(dependencies.app.addMaterials).not.toHaveBeenCalled();
+  expect(fake.sentMessages).toEqual([]);
+});
+
+test("does not add empty typed selections", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root });
+  const dependencies = createExtensionDependencies();
+  vi.mocked(dependencies.store.getCourse).mockResolvedValue({
+    ...course,
+    materials: [
+      { ...course.materials[0]!, path: join(root, "materials", "existing.md") },
+    ],
+  });
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add materials/existing.md");
+
+  expect(fake.ui.notify).toHaveBeenCalledWith(
+    "No new matching material files found",
+    "error",
+  );
+  expect(dependencies.app.addMaterials).not.toHaveBeenCalled();
+  expect(fake.sentMessages).toEqual([]);
+});
+
+test("requires a relative path outside TUI mode", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root, mode: "print" });
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add");
+
+  expect(fake.ui.notify).not.toHaveBeenCalled();
+  expect(dependencies.app.addMaterials).not.toHaveBeenCalled();
+  expect(fake.sentMessages).toEqual([]);
+});
+
+test("rejects absolute material paths without calling the application", async () => {
+  const root = await materialFixtureRoot();
+  const fake = createFakePi({ activity: idle, cwd: root });
+  const dependencies = createExtensionDependencies();
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "add /tmp/material.md");
+
+  expect(fake.ui.notify).toHaveBeenCalledWith(
+    "Material path must be relative to Pi's launch directory",
+    "error",
+  );
+  expect(dependencies.app.addMaterials).not.toHaveBeenCalled();
+  expect(fake.sentMessages).toEqual([]);
 });
 
 test("approves proposed concepts only through an explicit course command", async () => {

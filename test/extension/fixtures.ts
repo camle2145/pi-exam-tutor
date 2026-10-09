@@ -165,6 +165,7 @@ export function createExtensionDependencies(
     createCourse: vi.fn(async () => course),
     selectCourse: vi.fn(async () => idle),
     addMaterial: vi.fn(async () => course),
+    addMaterials: vi.fn(async () => course),
     requestMode: vi.fn(async () => idle),
     recordQuestion: vi.fn(async () => idle),
     acceptSubmission: vi.fn(async () => idle),

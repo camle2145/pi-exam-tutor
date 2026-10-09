@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -5,6 +6,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { TutorApplication } from "../../src/application.js";
 import type { Course, SessionActivity } from "../../src/domain.js";
+import { allExtensions, selectMaterialPaths } from "./material-browser.js";
+import {
+  resolveMaterialSelection,
+  type MaterialSelection,
+} from "./material-path.js";
 import { showConceptProposals } from "./ui.js";
 
 export interface CourseControllerDependencies {
@@ -166,17 +172,51 @@ export function createCourseController(
         return;
       }
       if (action === "add") {
-        const requestedValue = await commandValue(
-          ctx,
-          value,
-          "Absolute material path",
+        const courseId = runtime.selectedCourseId();
+        const course = await runtime.getCourse(courseId);
+        const configuredPaths = new Set(
+          course.materials.map(({ path }) => path),
         );
-        if (requestedValue === undefined) return;
-        const updated = await runtime.app.addMaterial(
-          runtime.selectedCourseId(),
-          unquote(requestedValue),
+        const requestedPath = unquote(value.trim());
+        if (requestedPath !== "" && isAbsolute(requestedPath)) {
+          notifyError(
+            ctx,
+            "Material path must be relative to Pi's launch directory",
+          );
+          return;
+        }
+
+        let selection: MaterialSelection | undefined;
+        try {
+          selection = await addMaterialSelection(ctx, value, configuredPaths);
+        } catch (error) {
+          notifyError(ctx, errorMessage(error));
+          return;
+        }
+        if (selection === undefined) return;
+        if (selection.paths.length === 0) {
+          notifyError(ctx, "No new matching material files found");
+          return;
+        }
+        if (
+          requestedPath !== "" &&
+          selection.kind === "directory" &&
+          ctx.mode === "tui" &&
+          !(await confirmDirectorySelection(ctx, selection, requestedPath))
+        ) {
+          return;
+        }
+
+        const updated = await runtime.app.addMaterials(
+          courseId,
+          selection.paths,
         );
-        if (ctx.hasUI) ctx.ui.notify("Course material added", "info");
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `Added ${selection.paths.length} material file(s)`,
+            "info",
+          );
+        }
         runtime.triggerTurn(conceptExtractionInstruction(updated));
         return;
       }
@@ -186,10 +226,45 @@ export function createCourseController(
       }
       notifyError(
         ctx,
-        "Usage: /course create <name> | select <course-id> | add <absolute-path> | concepts [approve [id...] | rename <id> <name> | parent <id> [parent-id] | remove <id>]",
+        "Usage: /course create <name> | select <course-id> | add [relative-file-or-folder] | concepts [approve [id...] | rename <id> <name> | parent <id> [parent-id] | remove <id>]",
       );
     },
   };
+}
+
+async function addMaterialSelection(
+  ctx: ExtensionCommandContext,
+  requestedValue: string,
+  configuredPaths: ReadonlySet<string>,
+): Promise<MaterialSelection | undefined> {
+  if (requestedValue.trim() === "") {
+    if (ctx.mode !== "tui") {
+      notifyError(ctx, "A relative material path is required");
+      return undefined;
+    }
+    return selectMaterialPaths(ctx, configuredPaths);
+  }
+  return resolveMaterialSelection(
+    ctx.cwd,
+    unquote(requestedValue.trim()),
+    allExtensions(),
+    configuredPaths,
+  );
+}
+
+async function confirmDirectorySelection(
+  ctx: ExtensionCommandContext,
+  selection: MaterialSelection,
+  directory: string,
+): Promise<boolean> {
+  return ctx.ui.confirm(
+    "Add course materials",
+    `Add ${selection.paths.length} material file(s) from ${directory}?`,
+  );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function conceptExtractionInstruction(course: Course): string {
