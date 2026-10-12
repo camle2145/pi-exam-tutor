@@ -427,13 +427,14 @@ test("returns to the compact pending-concepts list after approving one proposal"
   };
   const dependencies = createExtensionDependencies({
     approveConcepts: vi.fn(async (_courseId, ids: readonly string[]) => {
+      const staleCourse = currentCourse;
       currentCourse = {
         ...currentCourse,
         proposedConcepts: currentCourse.proposedConcepts.filter(
           ({ id }) => !ids.includes(id),
         ),
       };
-      return currentCourse;
+      return staleCourse;
     }),
   });
   vi.mocked(dependencies.store.getCourse).mockImplementation(
@@ -452,7 +453,13 @@ test("returns to the compact pending-concepts list after approving one proposal"
   expect(dependencies.app.approveConcepts).toHaveBeenCalledWith(course.id, [
     "newton-laws",
   ]);
-  expect(dependencies.store.getCourse).toHaveBeenCalledTimes(2);
+  const getCourseCallOrder = vi.mocked(dependencies.store.getCourse).mock
+    .invocationCallOrder;
+  const approvalCallOrder = vi.mocked(dependencies.app.approveConcepts).mock
+    .invocationCallOrder;
+  expect(getCourseCallOrder).toHaveLength(2);
+  expect(approvalCallOrder).toHaveLength(1);
+  expect(getCourseCallOrder[1]).toBeGreaterThan(approvalCallOrder[0]!);
   expect(fake.ui.select).toHaveBeenNthCalledWith(
     1,
     "Pending concepts",
@@ -485,10 +492,23 @@ test("returns to the compact pending-concepts list after approving one proposal"
 
 test("renders selected concept details and its source citations", async () => {
   const customRenders: string[] = [];
+  const first = conceptProposal;
+  const second = {
+    ...conceptProposal,
+    id: "impulse",
+    name: "Impulse",
+    sourceRefs: [
+      {
+        materialId: "material-1",
+        path: "/courses/physics/summary.md",
+        locator: "page 4",
+      },
+    ],
+  };
   const dependencies = createExtensionDependencies();
   vi.mocked(dependencies.store.getCourse).mockResolvedValue({
     ...course,
-    proposedConcepts: [conceptProposal],
+    proposedConcepts: [first, second],
   });
   const fake = createFakePi({ activity: idle });
   fake.ui.custom.mockImplementation(async (factory) => {
@@ -507,7 +527,8 @@ test("renders selected concept details and its source citations", async () => {
   fake.ui.select
     .mockImplementationOnce(async () => {
       fake.ui.custom.mockClear();
-      return "Newton's laws · newton-laws";
+      customRenders.length = 0;
+      return "Impulse · impulse";
     })
     .mockResolvedValueOnce("details")
     .mockResolvedValueOnce(undefined);
@@ -528,10 +549,14 @@ test("renders selected concept details and its source citations", async () => {
     ]),
   );
   expect(customRenders).toHaveLength(1);
-  expect(customRenders[0]).toContain("Newton's laws");
-  expect(customRenders[0]).toContain("newton-laws");
-  expect(customRenders[0]).toContain("/courses/physics/notes.md");
-  expect(customRenders[0]).toContain("# laws");
+  expect(customRenders[0]).toContain("Impulse");
+  expect(customRenders[0]).toContain("impulse");
+  expect(customRenders[0]).toContain("/courses/physics/summary.md");
+  expect(customRenders[0]).toContain("page 4");
+  expect(customRenders[0]).not.toContain("Newton's laws");
+  expect(customRenders[0]).not.toContain("newton-laws");
+  expect(customRenders[0]).not.toContain("/courses/physics/notes.md");
+  expect(customRenders[0]).not.toContain("# laws");
 });
 
 test("closes after approving the final proposal individually", async () => {
