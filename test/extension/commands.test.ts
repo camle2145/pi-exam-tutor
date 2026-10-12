@@ -10,6 +10,7 @@ import {
   activeExamWithAllDrafts,
   awaitingAnswer,
   awaitingGrade,
+  conceptProposal,
   course,
   createExtensionDependencies,
   idle,
@@ -410,6 +411,153 @@ test("approves proposed concepts only through an explicit course command", async
 
   expect(dependencies.app.approveConcepts).toHaveBeenCalledWith(course.id, [
     "newton-laws",
+  ]);
+});
+
+test("returns to the compact pending-concepts list after approving one proposal", async () => {
+  const first = conceptProposal;
+  const second = {
+    ...conceptProposal,
+    id: "impulse",
+    name: "Impulse",
+  };
+  let currentCourse = {
+    ...course,
+    proposedConcepts: [first, second],
+  };
+  const dependencies = createExtensionDependencies({
+    approveConcepts: vi.fn(async (_courseId, ids: readonly string[]) => {
+      currentCourse = {
+        ...currentCourse,
+        proposedConcepts: currentCourse.proposedConcepts.filter(
+          ({ id }) => !ids.includes(id),
+        ),
+      };
+      return currentCourse;
+    }),
+  });
+  vi.mocked(dependencies.store.getCourse).mockImplementation(
+    async () => currentCourse,
+  );
+  const fake = createFakePi({ activity: idle });
+  fake.ui.select
+    .mockResolvedValueOnce("Newton's laws · newton-laws")
+    .mockResolvedValueOnce("approve")
+    .mockResolvedValueOnce(undefined);
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "concepts");
+
+  expect(dependencies.app.approveConcepts).toHaveBeenCalledWith(course.id, [
+    "newton-laws",
+  ]);
+  expect(fake.ui.select).toHaveBeenNthCalledWith(
+    1,
+    "Pending concepts",
+    expect.arrayContaining([
+      "Approve all pending concepts",
+      "Newton's laws · newton-laws",
+      "Impulse · impulse",
+    ]),
+  );
+  expect(fake.ui.select).toHaveBeenNthCalledWith(
+    2,
+    "Concept action",
+    expect.arrayContaining([
+      "approve",
+      "details",
+      "rename",
+      "parent",
+      "remove",
+    ]),
+  );
+  expect(fake.ui.select).toHaveBeenNthCalledWith(
+    3,
+    "Pending concepts",
+    expect.arrayContaining(["Impulse · impulse"]),
+  );
+  expect(fake.ui.select.mock.calls[2]?.[1]).not.toContain(
+    "Newton's laws · newton-laws",
+  );
+});
+
+test("approves all pending concepts only after confirmation", async () => {
+  const first = conceptProposal;
+  const second = {
+    ...conceptProposal,
+    id: "impulse",
+    name: "Impulse",
+  };
+  let currentCourse = {
+    ...course,
+    proposedConcepts: [first, second],
+  };
+  const dependencies = createExtensionDependencies({
+    approveConcepts: vi.fn(async (_courseId, ids: readonly string[]) => {
+      currentCourse = {
+        ...currentCourse,
+        proposedConcepts:
+          ids.length === 0
+            ? []
+            : currentCourse.proposedConcepts.filter(
+                ({ id }) => !ids.includes(id),
+              ),
+      };
+      return currentCourse;
+    }),
+  });
+  vi.mocked(dependencies.store.getCourse).mockImplementation(
+    async () => currentCourse,
+  );
+  const fake = createFakePi({ activity: idle });
+  fake.ui.select.mockResolvedValueOnce("Approve all pending concepts");
+  fake.ui.confirm.mockResolvedValueOnce(true);
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "concepts");
+
+  expect(fake.ui.confirm).toHaveBeenCalledWith(
+    "Approve all pending concepts",
+    "Approve all 2 pending concept proposals?",
+  );
+  expect(dependencies.app.approveConcepts).toHaveBeenCalledWith(course.id, []);
+  expect(fake.ui.select).toHaveBeenCalledTimes(1);
+  expect(fake.ui.select).not.toHaveBeenCalledWith(
+    "Course action",
+    expect.anything(),
+  );
+});
+
+test("cancelling approval of all pending concepts keeps the list open", async () => {
+  const first = conceptProposal;
+  const second = {
+    ...conceptProposal,
+    id: "impulse",
+    name: "Impulse",
+  };
+  const currentCourse = {
+    ...course,
+    proposedConcepts: [first, second],
+  };
+  const dependencies = createExtensionDependencies();
+  vi.mocked(dependencies.store.getCourse).mockResolvedValue(currentCourse);
+  const fake = createFakePi({ activity: idle });
+  fake.ui.select
+    .mockResolvedValueOnce("Approve all pending concepts")
+    .mockResolvedValueOnce(undefined);
+  fake.ui.confirm.mockResolvedValueOnce(false);
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "concepts");
+
+  expect(dependencies.app.approveConcepts).not.toHaveBeenCalled();
+  expect(fake.ui.select).toHaveBeenCalledTimes(2);
+  expect(fake.ui.select.mock.calls.map(([title]) => title)).toEqual([
+    "Pending concepts",
+    "Pending concepts",
   ]);
 });
 
