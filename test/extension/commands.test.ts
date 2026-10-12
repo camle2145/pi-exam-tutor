@@ -452,6 +452,7 @@ test("returns to the compact pending-concepts list after approving one proposal"
   expect(dependencies.app.approveConcepts).toHaveBeenCalledWith(course.id, [
     "newton-laws",
   ]);
+  expect(dependencies.store.getCourse).toHaveBeenCalledTimes(2);
   expect(fake.ui.select).toHaveBeenNthCalledWith(
     1,
     "Pending concepts",
@@ -480,6 +481,91 @@ test("returns to the compact pending-concepts list after approving one proposal"
   expect(fake.ui.select.mock.calls[2]?.[1]).not.toContain(
     "Newton's laws · newton-laws",
   );
+});
+
+test("renders selected concept details and its source citations", async () => {
+  const customRenders: string[] = [];
+  const dependencies = createExtensionDependencies();
+  vi.mocked(dependencies.store.getCourse).mockResolvedValue({
+    ...course,
+    proposedConcepts: [conceptProposal],
+  });
+  const fake = createFakePi({ activity: idle });
+  fake.ui.custom.mockImplementation(async (factory) => {
+    const component = factory(
+      {},
+      {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      },
+      {},
+      () => {},
+    );
+    customRenders.push(component.render(120).join("\n"));
+    return undefined;
+  });
+  fake.ui.select
+    .mockImplementationOnce(async () => {
+      fake.ui.custom.mockClear();
+      return "Newton's laws · newton-laws";
+    })
+    .mockResolvedValueOnce("details")
+    .mockResolvedValueOnce(undefined);
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "concepts");
+
+  expect(fake.ui.select).toHaveBeenNthCalledWith(
+    2,
+    "Concept action",
+    expect.arrayContaining([
+      "approve",
+      "details",
+      "rename",
+      "parent",
+      "remove",
+    ]),
+  );
+  expect(customRenders).toHaveLength(1);
+  expect(customRenders[0]).toContain("Newton's laws");
+  expect(customRenders[0]).toContain("newton-laws");
+  expect(customRenders[0]).toContain("/courses/physics/notes.md");
+  expect(customRenders[0]).toContain("# laws");
+});
+
+test("closes after approving the final proposal individually", async () => {
+  let currentCourse = {
+    ...course,
+    proposedConcepts: [conceptProposal],
+  };
+  const dependencies = createExtensionDependencies({
+    approveConcepts: vi.fn(async () => {
+      currentCourse = { ...currentCourse, proposedConcepts: [] };
+      return currentCourse;
+    }),
+  });
+  vi.mocked(dependencies.store.getCourse).mockImplementation(
+    async () => currentCourse,
+  );
+  const fake = createFakePi({ activity: idle });
+  fake.ui.select
+    .mockResolvedValueOnce("Newton's laws · newton-laws")
+    .mockResolvedValueOnce("approve");
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "concepts");
+
+  expect(dependencies.app.approveConcepts).toHaveBeenCalledWith(course.id, [
+    "newton-laws",
+  ]);
+  expect(fake.ui.select).toHaveBeenCalledTimes(2);
+  expect(fake.ui.select).not.toHaveBeenCalledWith(
+    "Course action",
+    expect.anything(),
+  );
+  expect(fake.ui.select).not.toHaveBeenCalledWith("Pending concepts", []);
 });
 
 test("approves all pending concepts only after confirmation", async () => {
