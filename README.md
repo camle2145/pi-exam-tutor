@@ -59,7 +59,9 @@ Folder imports recursively add matching new regular files. Choose `Filter extens
 
 Paths are confined to the launch directory. Already-added entries are disabled, and selecting a folder shows its file count for confirmation. Stored citations continue to use canonical absolute paths.
 
-Review the source-cited proposals that extraction returns:
+Review source-cited proposals with `/course concepts`. In the interactive TUI it opens a compact `Name · ID` list: select a concept to approve, view its citations, rename it, change its parent, or remove it. Each action returns to that list while proposals remain. Select **Approve all pending concepts** to confirm and approve the entire pending set. The list closes after the last proposal is approved.
+
+`/course concepts approve` (with no IDs) also approves every pending proposal; provide one or more IDs to approve only those proposals.
 
 ```text
 /course concepts approve
