@@ -490,6 +490,66 @@ test("returns to the compact pending-concepts list after approving one proposal"
   );
 });
 
+test("keeps colliding concept rows distinct for curation actions", async () => {
+  const first = {
+    ...conceptProposal,
+    id: "C",
+    name: "A · B",
+  };
+  const second = {
+    ...conceptProposal,
+    id: "B · C",
+    name: "A",
+  };
+  const currentCourse = {
+    ...course,
+    proposedConcepts: [first, second],
+  };
+  const dependencies = createExtensionDependencies();
+  vi.mocked(dependencies.store.getCourse).mockResolvedValue(currentCourse);
+  const fake = createFakePi({ activity: idle });
+  const initialProposalChoices: string[] = [];
+  let nextProposalChoice = 0;
+  fake.ui.select.mockImplementation(async (title, choices) => {
+    if (title === "Pending concepts") {
+      const proposalChoices = choices.filter(
+        (choice) => choice !== "Approve all pending concepts",
+      );
+      if (initialProposalChoices.length === 0) {
+        initialProposalChoices.push(...proposalChoices);
+      }
+      return initialProposalChoices[nextProposalChoice++];
+    }
+    return "parent";
+  });
+  fake.ui.input.mockResolvedValue("root");
+  extension(fake.api, dependencies);
+  await fake.startSession();
+
+  await fake.invokeCommand("course", "concepts");
+
+  const visibleChoice = "A · B · C";
+  expect(initialProposalChoices).toHaveLength(2);
+  expect(new Set(initialProposalChoices).size).toBe(2);
+  expect(
+    initialProposalChoices.map((choice) =>
+      choice.replace(/\u2063\u200b+$/u, ""),
+    ),
+  ).toEqual([visibleChoice, visibleChoice]);
+  expect(dependencies.app.editProposedConcept).toHaveBeenNthCalledWith(
+    1,
+    course.id,
+    "C",
+    { parentId: "root" },
+  );
+  expect(dependencies.app.editProposedConcept).toHaveBeenNthCalledWith(
+    2,
+    course.id,
+    "B · C",
+    { parentId: "root" },
+  );
+});
+
 test("renders selected concept details and its source citations", async () => {
   const customRenders: string[] = [];
   const first = conceptProposal;

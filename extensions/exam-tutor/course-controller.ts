@@ -36,6 +36,38 @@ export interface CourseController {
   ): Promise<void>;
 }
 
+const INVISIBLE_SELECTION_SEPARATOR = "\u2063";
+const INVISIBLE_SELECTION_UNIT = "\u200b";
+
+function conceptProposalChoices(proposals: readonly CourseConceptProposal[]): {
+  choices: string[];
+  proposalByChoice: Map<string, CourseConceptProposal>;
+} {
+  const visibleChoices = proposals.map(({ name, id }) => `${name} · ${id}`);
+  const visibleChoiceCounts = new Map<string, number>();
+  for (const choice of visibleChoices) {
+    visibleChoiceCounts.set(choice, (visibleChoiceCounts.get(choice) ?? 0) + 1);
+  }
+
+  const occupiedChoices = new Set(visibleChoices);
+  const proposalByChoice = new Map<string, CourseConceptProposal>();
+  const choices = visibleChoices.map((visibleChoice, index) => {
+    let choice = visibleChoice;
+    if ((visibleChoiceCounts.get(visibleChoice) ?? 0) > 1) {
+      let suffixLength = 1;
+      do {
+        choice = `${visibleChoice}${INVISIBLE_SELECTION_SEPARATOR}${INVISIBLE_SELECTION_UNIT.repeat(suffixLength)}`;
+        suffixLength += 1;
+      } while (occupiedChoices.has(choice));
+    }
+    occupiedChoices.add(choice);
+    proposalByChoice.set(choice, proposals[index]!);
+    return choice;
+  });
+
+  return { choices, proposalByChoice };
+}
+
 export function createCourseController(
   pi: ExtensionAPI,
   runtime: CourseControllerDependencies,
@@ -49,16 +81,9 @@ export function createCourseController(
       const course = await runtime.getCourse(courseId);
       if (course.proposedConcepts.length === 0) return;
 
-      const proposalByChoice = new Map<string, CourseConceptProposal>(
-        course.proposedConcepts.map((proposal) => [
-          `${proposal.name} · ${proposal.id}`,
-          proposal,
-        ]),
-      );
-      const choices = [
-        approveAllChoice,
-        ...course.proposedConcepts.map(({ name, id }) => `${name} · ${id}`),
-      ];
+      const { choices: proposalChoices, proposalByChoice } =
+        conceptProposalChoices(course.proposedConcepts);
+      const choices = [approveAllChoice, ...proposalChoices];
       const selected = await ctx.ui.select("Pending concepts", choices);
       if (selected === undefined) return;
 
