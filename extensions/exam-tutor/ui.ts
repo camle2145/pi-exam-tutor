@@ -9,11 +9,14 @@ import {
   Text,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
-import type { Course, Dashboard, SessionActivity } from "../../src/domain.js";
+import type {
+  Course,
+  CourseConceptProposal,
+  Dashboard,
+  SessionActivity,
+} from "../../src/domain.js";
 
 export const DASHBOARD_MESSAGE_TYPE = "pi-exam-tutor/dashboard-v1";
-export const CONCEPT_PROPOSALS_MESSAGE_TYPE =
-  "pi-exam-tutor/concept-proposals-v1";
 const UI_KEY = "exam-tutor";
 
 export function updateTutorStatus(
@@ -71,27 +74,23 @@ export async function showDashboard(
   );
 }
 
-export async function showConceptProposals(
-  pi: ExtensionAPI,
+export async function showConceptProposalDetails(
   ctx: ExtensionContext,
-  course: Course,
+  proposal: CourseConceptProposal,
 ): Promise<void> {
-  const text = conceptProposalText(course);
-  if (ctx.mode !== "tui") {
-    pi.sendMessage(
-      {
-        customType: CONCEPT_PROPOSALS_MESSAGE_TYPE,
-        content: text,
-        display: true,
-        details: { courseId: course.id },
-      },
-      { triggerTurn: false, deliverAs: "nextTurn" },
-    );
-    return;
-  }
+  if (ctx.mode !== "tui") return;
+  const text = [
+    `${proposal.name} (${proposal.id})`,
+    ...(proposal.parentId === undefined
+      ? []
+      : [`Parent: ${proposal.parentId}`]),
+    ...proposal.sourceRefs.map(
+      ({ path, locator }) => `Source: ${path} — ${locator}`,
+    ),
+  ].join("\n");
   await ctx.ui.custom<void>(
     (_tui, theme, _keybindings, done) =>
-      new ConceptProposalsComponent(text, theme, () => done()),
+      new ConceptProposalDetailsComponent(text, theme, () => done()),
   );
 }
 
@@ -213,7 +212,7 @@ class DashboardComponent extends Container {
   }
 }
 
-class ConceptProposalsComponent extends Container {
+class ConceptProposalDetailsComponent extends Container {
   constructor(
     text: string,
     theme: Theme,

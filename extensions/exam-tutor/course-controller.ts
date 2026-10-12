@@ -5,13 +5,17 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { TutorApplication } from "../../src/application.js";
-import type { Course, SessionActivity } from "../../src/domain.js";
+import type {
+  Course,
+  CourseConceptProposal,
+  SessionActivity,
+} from "../../src/domain.js";
 import { allExtensions, selectMaterialPaths } from "./material-browser.js";
 import {
   resolveMaterialSelection,
   type MaterialSelection,
 } from "./material-path.js";
-import { showConceptProposals } from "./ui.js";
+import { showConceptProposalDetails } from "./ui.js";
 
 export interface CourseControllerDependencies {
   app: TutorApplication;
@@ -36,13 +40,94 @@ export function createCourseController(
   pi: ExtensionAPI,
   runtime: CourseControllerDependencies,
 ): CourseController {
+  const runConceptCuration = async (
+    ctx: ExtensionCommandContext,
+    courseId: string,
+  ): Promise<void> => {
+    const approveAllChoice = "Approve all pending concepts";
+    while (true) {
+      const course = await runtime.getCourse(courseId);
+      if (course.proposedConcepts.length === 0) return;
+
+      const proposalByChoice = new Map<string, CourseConceptProposal>(
+        course.proposedConcepts.map((proposal) => [
+          `${proposal.name} · ${proposal.id}`,
+          proposal,
+        ]),
+      );
+      const choices = [
+        approveAllChoice,
+        ...course.proposedConcepts.map(({ name, id }) => `${name} · ${id}`),
+      ];
+      const selected = await ctx.ui.select("Pending concepts", choices);
+      if (selected === undefined) return;
+
+      if (selected === approveAllChoice) {
+        if (
+          !(await confirmApproveAllConcepts(
+            ctx,
+            course.proposedConcepts.length,
+          ))
+        ) {
+          continue;
+        }
+        await runtime.app.approveConcepts(courseId, []);
+        ctx.ui.notify("All pending concept proposals approved", "info");
+        continue;
+      }
+
+      const proposal = proposalByChoice.get(selected);
+      if (proposal === undefined) continue;
+      const action = await ctx.ui.select("Concept action", [
+        "approve",
+        "details",
+        "rename",
+        "parent",
+        "remove",
+      ]);
+      if (action === undefined) continue;
+
+      if (action === "approve") {
+        await runtime.app.approveConcepts(courseId, [proposal.id]);
+        ctx.ui.notify("Concept proposals approved", "info");
+        continue;
+      }
+      if (action === "details") {
+        await showConceptProposalDetails(ctx, proposal);
+        continue;
+      }
+      if (action === "rename") {
+        const name = await ctx.ui.input("Concept name");
+        if (name === undefined || name.trim() === "") continue;
+        await runtime.app.editProposedConcept(courseId, proposal.id, {
+          name: unquote(name.trim()),
+        });
+        ctx.ui.notify("Concept proposal renamed", "info");
+        continue;
+      }
+      if (action === "parent") {
+        const parent = await ctx.ui.input("Parent concept ID (blank to clear)");
+        await runtime.app.editProposedConcept(courseId, proposal.id, {
+          parentId:
+            parent === undefined || parent.trim() === "" ? null : parent.trim(),
+        });
+        ctx.ui.notify("Concept proposal parent updated", "info");
+        continue;
+      }
+      if (action === "remove") {
+        await runtime.app.removeProposedConcept(courseId, proposal.id);
+        ctx.ui.notify("Concept proposal removed", "info");
+        continue;
+      }
+    }
+  };
+
   const handleConceptCommand = async (
     rawArgs: string,
     ctx: ExtensionCommandContext,
   ): Promise<void> => {
-    let { action, value } = runtime.splitCommand(rawArgs);
+    const { action, value } = runtime.splitCommand(rawArgs);
     const courseId = runtime.selectedCourseId();
-    const course = await runtime.getCourse(courseId);
     if (action === "") {
       if (ctx.mode !== "tui") {
         notifyError(
@@ -51,31 +136,8 @@ export function createCourseController(
         );
         return;
       }
-      await showConceptProposals(pi, ctx, course);
-      const selected = await ctx.ui.select(
-        "Pending concept",
-        course.proposedConcepts.map(({ id, name }) => `${id} — ${name}`),
-      );
-      if (selected === undefined) return;
-      const conceptId = selected.split(" — ")[0]!;
-      action =
-        (await ctx.ui.select("Concept action", [
-          "approve",
-          "rename",
-          "parent",
-          "remove",
-        ])) ?? "";
-      if (action === "") return;
-      if (action === "approve" || action === "remove") value = conceptId;
-      if (action === "rename") {
-        const name = await ctx.ui.input("Concept name");
-        if (name === undefined || name.trim() === "") return;
-        value = `${conceptId} ${name.trim()}`;
-      }
-      if (action === "parent") {
-        const parent = await ctx.ui.input("Parent concept ID (blank to clear)");
-        value = `${conceptId}${parent === undefined || parent.trim() === "" ? "" : ` ${parent.trim()}`}`;
-      }
+      await runConceptCuration(ctx, courseId);
+      return;
     }
     if (action === "approve") {
       const ids = value.trim() === "" ? [] : value.trim().split(/\s+/);
@@ -274,6 +336,16 @@ async function confirmDirectorySelection(
   return ctx.ui.confirm(
     "Add course materials",
     `Add ${selection.paths.length} material file(s) from ${directory}?`,
+  );
+}
+
+async function confirmApproveAllConcepts(
+  ctx: ExtensionCommandContext,
+  count: number,
+): Promise<boolean> {
+  return ctx.ui.confirm(
+    "Approve all pending concepts",
+    `Approve all ${count} pending concept proposal${count === 1 ? "" : "s"}?`,
   );
 }
 
